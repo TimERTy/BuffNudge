@@ -22,20 +22,19 @@ local DEFAULT_FLASK_IDS = {
 }
 
 -- Confirmed Midnight raid buff spell IDs (flagged non-secret by Blizzard).
--- class: WoW class name as returned by UnitClass() — used to skip the warning
---        when nobody in the group can provide the buff.
+-- class: WoW class token from UnitClass() — warning skipped if class absent from group.
 local DEFAULT_RAID_BUFFS = {
-    { name = "Arcane Intellect",       spellID = 1459,   class = "MAGE"        },
-    { name = "Battle Shout",           spellID = 6673,   class = "WARRIOR"     },
-    { name = "Power Word: Fortitude",  spellID = 21562,  class = "PRIEST"      },
-    { name = "Mark of the Wild",       spellID = 1126,   class = "DRUID"       },
-    { name = "Source of Magic",        spellID = 369459, class = "EVOKER"      },
-    { name = "Skyfury",                spellID = 462854, class = "SHAMAN"      },
-    { name = "Symbiotic Relationship", spellID = 474754, class = "DRUID"       },
+    { name = "Arcane Intellect",       spellID = 1459,   class = "MAGE"    },
+    { name = "Battle Shout",           spellID = 6673,   class = "WARRIOR" },
+    { name = "Power Word: Fortitude",  spellID = 21562,  class = "PRIEST"  },
+    { name = "Mark of the Wild",       spellID = 1126,   class = "DRUID"   },
+    { name = "Source of Magic",        spellID = 369459, class = "EVOKER"  },
+    { name = "Skyfury",                spellID = 462854, class = "SHAMAN"  },
+    { name = "Symbiotic Relationship", spellID = 474754, class = "DRUID"   },
 }
 
 -- Enchantable slots in Midnight: Helmet, Shoulder, Chest, Boots, Rings, Weapons.
--- Cloak and Bracers are NOT enchantable in Midnight (removed from previous expansions).
+-- Cloak and Bracers are NOT enchantable in Midnight.
 local ENCHANT_SLOTS = {
     { id =  1, name = "Helmet"    },
     { id =  3, name = "Shoulder"  },
@@ -56,6 +55,7 @@ local ICON_RAIDBUFF = 136116
 local RED    = "|cffff4444"  -- missing / error
 local ORANGE = "|cffff9900"  -- warning
 local YELLOW = "|cffffff00"  -- raid buff missing
+local GREEN  = "|cff4dff4d"  -- good / fps ok
 local RESET  = "|r"
 
 -- ============================================================
@@ -63,48 +63,47 @@ local RESET  = "|r"
 -- ============================================================
 
 -- BuffNudgeDB is declared in the TOC and initialised in ADDON_LOADED.
--- Shape: { foodIDs={}, flaskIDs={}, raidBuffs={ {name,spellID}, ... } }
-
-local function DB() return BuffNudgeDB end
+-- Shape: { foodIDs={}, flaskIDs={}, raidBuffs={ {name,spellID}, ... },
+--          fpsHidden=bool, panelX=n, panelY=n, fpsX=n, fpsY=n }
 
 -- ============================================================
 -- CACHED ID SETS
 -- Rebuilt once on load and when the Setup panel saves changes.
--- Using hash sets (id → true) so membership checks are O(1).
+-- Hash sets (id → true) so membership checks are O(1).
 -- ============================================================
 
-local cachedFoodSet, cachedFlaskSet, cachedRaidBuffList
+local cachedFoodSet, cachedFlaskSet, cachedRaidBuffs
 
 function BuffNudge_InvalidateCache()
-    cachedFoodSet     = nil
-    cachedFlaskSet    = nil
-    cachedRaidBuffList = nil
+    cachedFoodSet  = nil
+    cachedFlaskSet = nil
+    cachedRaidBuffs = nil
 end
 
 local function GetFoodSet()
     if cachedFoodSet then return cachedFoodSet end
     cachedFoodSet = {}
-    for _, v in ipairs(DEFAULT_FOOD_IDS)   do cachedFoodSet[v] = true end
-    for _, v in ipairs(DB().foodIDs or {}) do cachedFoodSet[v] = true end
+    for _, v in ipairs(DEFAULT_FOOD_IDS)          do cachedFoodSet[v] = true end
+    for _, v in ipairs(BuffNudgeDB.foodIDs or {}) do cachedFoodSet[v] = true end
     return cachedFoodSet
 end
 
 local function GetFlaskSet()
     if cachedFlaskSet then return cachedFlaskSet end
     cachedFlaskSet = {}
-    for _, v in ipairs(DEFAULT_FLASK_IDS)   do cachedFlaskSet[v] = true end
-    for _, v in ipairs(DB().flaskIDs or {}) do cachedFlaskSet[v] = true end
+    for _, v in ipairs(DEFAULT_FLASK_IDS)          do cachedFlaskSet[v] = true end
+    for _, v in ipairs(BuffNudgeDB.flaskIDs or {}) do cachedFlaskSet[v] = true end
     return cachedFlaskSet
 end
 
-local function GetRaidBuffList()
-    if cachedRaidBuffList then return cachedRaidBuffList end
+local function GetRaidBuffs()
+    if cachedRaidBuffs then return cachedRaidBuffs end
     local seen, out = {}, {}
-    for _, e in ipairs(DEFAULT_RAID_BUFFS)   do seen[e.spellID] = true; table.insert(out, e) end
-    for _, e in ipairs(DB().raidBuffs or {}) do
+    for _, e in ipairs(DEFAULT_RAID_BUFFS)          do seen[e.spellID] = true; table.insert(out, e) end
+    for _, e in ipairs(BuffNudgeDB.raidBuffs or {}) do
         if not seen[e.spellID] then seen[e.spellID] = true; table.insert(out, e) end
     end
-    cachedRaidBuffList = out
+    cachedRaidBuffs = out
     return out
 end
 
@@ -113,8 +112,6 @@ end
 -- ============================================================
 
 -- Scan all player buffs once per Refresh and return a spellID → true set.
--- Every subsequent check does a single O(1) table lookup instead of
--- re-iterating up to 40 aura slots per spell ID being tested.
 local function GetPlayerAuraSet()
     local set = {}
     for i = 1, 40 do
@@ -125,7 +122,7 @@ local function GetPlayerAuraSet()
     return set
 end
 
--- Returns a class-token → true set for everyone in the group.
+-- Returns a class-token → true set for everyone in the group including the player.
 local function GetGroupClasses()
     local classes = {}
     local _, playerClass = UnitClass("player")
@@ -155,10 +152,8 @@ local function HasFlask(auraSet)
 end
 
 local function HasSoulstone(auraSet, groupClasses)
-    -- No Warlock in group = no soulstone possible, skip entirely.
-    if not groupClasses["WARLOCK"] then return true end
+    if not groupClasses["WARLOCK"] then return true end  -- no warlock, skip
     if auraSet[20707] then return true end
-    -- Scan group members only when necessary.
     for i = 1, GetNumGroupMembers() do
         local unit = IsInRaid() and ("raid"..i) or ("party"..i)
         if UnitExists(unit) then
@@ -172,8 +167,7 @@ local function HasSoulstone(auraSet, groupClasses)
     return false
 end
 
--- Blessing of the Bronze: one ID per class (381732–381758).
--- With auraSet this is 27 hash lookups instead of 27×40 iterations.
+-- Blessing of the Bronze: one ID per class (381732–381758), O(27) hash lookups.
 local function HasBlessingOfBronze(auraSet)
     for id = 381732, 381758 do
         if auraSet[id] then return true end
@@ -183,7 +177,7 @@ end
 
 local function MissingRaidBuffs(auraSet, groupClasses)
     local missing = {}
-    for _, entry in ipairs(GetRaidBuffList()) do
+    for _, entry in ipairs(GetRaidBuffs()) do
         if not entry.class or groupClasses[entry.class] then
             if not auraSet[entry.spellID] then
                 table.insert(missing, entry.name)
@@ -224,7 +218,12 @@ panel:SetMovable(true)
 panel:EnableMouse(true)
 panel:RegisterForDrag("LeftButton")
 panel:SetScript("OnDragStart", panel.StartMoving)
-panel:SetScript("OnDragStop",  panel.StopMovingOrSizing)
+panel:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local x, y = self:GetLeft(), self:GetTop()
+    BuffNudgeDB.panelX = x
+    BuffNudgeDB.panelY = y
+end)
 panel:SetBackdrop({
     bgFile   = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
@@ -250,7 +249,7 @@ local function GetRow(i)
     if not rows[i] then
         local row = CreateFrame("Frame", nil, panel)
         row:SetHeight(18)
-        row:SetPoint("TOPLEFT",  panel, "TOPLEFT",  8, -20 - (i - 1) * 18)
+        row:SetPoint("TOPLEFT",  panel, "TOPLEFT",   8, -20 - (i - 1) * 18)
         row:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -20 - (i - 1) * 18)
 
         local icon = row:CreateTexture(nil, "ARTWORK")
@@ -265,7 +264,7 @@ local function GetRow(i)
 
         row.icon = icon
         row.text = text
-        rows[i] = row
+        rows[i]  = row
     end
     return rows[i]
 end
@@ -281,12 +280,11 @@ function BuffNudge_Refresh()
         return
     end
 
-    -- Scan player auras once; all checks below reuse this set.
     local auraSet     = GetPlayerAuraSet()
     local groupClasses = GetGroupClasses()
     local items = {}
 
-    if not HasFood(auraSet)                    then table.insert(items, { text=RED..   "No Food Buff"  ..RESET, icon=ICON_FOOD    }) end
+    if not HasFood(auraSet)                    then table.insert(items, { text=RED..   "No Food Buff"   ..RESET, icon=ICON_FOOD    }) end
     if not HasFlask(auraSet)                   then table.insert(items, { text=RED..   "No Flask/Phial" ..RESET, icon=ICON_FLASK   }) end
     if not HasSoulstone(auraSet, groupClasses) then table.insert(items, { text=ORANGE.."No Soulstone"   ..RESET, icon=ICON_STONE   }) end
 
@@ -321,7 +319,11 @@ fpsFrame:SetMovable(true)
 fpsFrame:EnableMouse(true)
 fpsFrame:RegisterForDrag("LeftButton")
 fpsFrame:SetScript("OnDragStart", fpsFrame.StartMoving)
-fpsFrame:SetScript("OnDragStop",  fpsFrame.StopMovingOrSizing)
+fpsFrame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    BuffNudgeDB.fpsX = self:GetLeft()
+    BuffNudgeDB.fpsY = self:GetTop()
+end)
 fpsFrame:SetBackdrop({
     bgFile   = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
@@ -341,6 +343,7 @@ local function FpsColor(fps)
 end
 
 C_Timer.NewTicker(1, function()
+    if not fpsFrame:IsShown() then return end
     local fps = math.floor(GetFramerate())
     fpsText:SetText(FpsColor(fps)..fps..RESET.." fps")
 end)
@@ -349,35 +352,49 @@ end)
 -- EVENTS
 -- ============================================================
 
-local eventFrame = CreateFrame("Frame")
+local eventFrame   = CreateFrame("Frame")
+local refreshPending = false
+
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("UNIT_AURA")
 
-local lastCheck = 0
+local lastFire = 0
 eventFrame:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 ~= "BuffNudge" then return end
-        -- Initialise SavedVariables
         BuffNudgeDB = BuffNudgeDB or {}
         BuffNudgeDB.foodIDs   = BuffNudgeDB.foodIDs   or {}
         BuffNudgeDB.flaskIDs  = BuffNudgeDB.flaskIDs  or {}
         BuffNudgeDB.raidBuffs = BuffNudgeDB.raidBuffs or {}
         if BuffNudgeDB.fpsHidden then fpsFrame:Hide() end
+        if BuffNudgeDB.panelX then
+            panel:ClearAllPoints()
+            panel:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", BuffNudgeDB.panelX, BuffNudgeDB.panelY)
+        end
+        if BuffNudgeDB.fpsX then
+            fpsFrame:ClearAllPoints()
+            fpsFrame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", BuffNudgeDB.fpsX, BuffNudgeDB.fpsY)
+        end
         return
     end
-    if event == "UNIT_AURA" and arg1 ~= "player" then return end
-    local now = GetTime()
-    if now - lastCheck < 2 then return end
-    lastCheck = now
-    C_Timer.After(0.5, BuffNudge_Refresh)
-end)
 
-C_Timer.NewTicker(60, function()
-    local _, instanceType = IsInInstance()
-    if instanceType == "raid" or instanceType == "party" then BuffNudge_Refresh() end
+    if event == "UNIT_AURA" and arg1 ~= "player" then return end
+
+    local now = GetTime()
+    if now - lastFire < 2 then return end
+    lastFire = now
+
+    if not refreshPending then
+        refreshPending = true
+        C_Timer.After(0.5, function()
+            refreshPending = false
+            BuffNudge_Refresh()
+        end)
+    end
 end)
 
 -- ============================================================
