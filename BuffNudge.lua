@@ -6,13 +6,30 @@
 -- DEFAULTS — fallback IDs until you capture your own via /bn setup
 -- ============================================================
 
-local DEFAULT_FOOD_IDS  = { 431040, 104270, 57079 }
-local DEFAULT_FLASK_IDS = { 432021, 432022, 432023 }
+-- NOTE: Midnight has 80+ Hearty Well Fed variants (IDs 454188–1285644+).
+-- Use /bn setup to tag your specific food buff — defaults here cover common bases only.
+local DEFAULT_FOOD_IDS = {
+    462186,  -- Hearty Well Fed (base)
+    57399,   -- Well Fed (older fallback)
+}
+
+-- All four Midnight stat flasks. Use /bn setup if you use a cauldron variant.
+local DEFAULT_FLASK_IDS = {
+    1235108,  -- Flask of the Magisters      (Mastery)
+    1235110,  -- Flask of the Blood Knights  (Haste)
+    1235057,  -- Flask of Thalassian Resistance (Versatility)
+    1230878,  -- Flask of the Shattered Sun  (Critical Strike)
+}
+
+-- Confirmed Midnight raid buff spell IDs (flagged non-secret by Blizzard).
 local DEFAULT_RAID_BUFFS = {
-    { name = "Arcane Intellect",      spellID = 1459  },
-    { name = "Battle Shout",          spellID = 6673  },
-    { name = "Power Word: Fortitude", spellID = 21562 },
-    { name = "Mark of the Wild",      spellID = 1126  },
+    { name = "Arcane Intellect",      spellID = 1459   },  -- Mage
+    { name = "Battle Shout",          spellID = 6673   },  -- Warrior
+    { name = "Power Word: Fortitude", spellID = 21562  },  -- Priest
+    { name = "Mark of the Wild",      spellID = 1126   },  -- Druid
+    { name = "Source of Magic",       spellID = 369459 },  -- Augmentation Evoker
+    { name = "Skyfury",               spellID = 462854 },  -- Shaman
+    { name = "Symbiotic Relationship",spellID = 474754 },  -- Druid (new)
 }
 
 -- Gear slots to check for permanent enchants.
@@ -105,12 +122,24 @@ local function HasSoulstone()
     return false
 end
 
+-- Blessing of the Bronze: one spell ID per class (381732–381758).
+-- Present if player has any of them.
+local function HasBlessingOfBronze()
+    for id = 381732, 381758 do
+        if HasAuraByID("player", id) then return true end
+    end
+    return false
+end
+
 local function MissingRaidBuffs()
     local missing = {}
     for _, entry in ipairs(GetRaidBuffList()) do
         if not HasAuraByID("player", entry.spellID) then
             table.insert(missing, entry.name)
         end
+    end
+    if not HasBlessingOfBronze() then
+        table.insert(missing, "Blessing of the Bronze")
     end
     return missing
 end
