@@ -22,14 +22,16 @@ local DEFAULT_FLASK_IDS = {
 }
 
 -- Confirmed Midnight raid buff spell IDs (flagged non-secret by Blizzard).
+-- class: WoW class name as returned by UnitClass() — used to skip the warning
+--        when nobody in the group can provide the buff.
 local DEFAULT_RAID_BUFFS = {
-    { name = "Arcane Intellect",      spellID = 1459   },  -- Mage
-    { name = "Battle Shout",          spellID = 6673   },  -- Warrior
-    { name = "Power Word: Fortitude", spellID = 21562  },  -- Priest
-    { name = "Mark of the Wild",      spellID = 1126   },  -- Druid
-    { name = "Source of Magic",       spellID = 369459 },  -- Augmentation Evoker
-    { name = "Skyfury",               spellID = 462854 },  -- Shaman
-    { name = "Symbiotic Relationship",spellID = 474754 },  -- Druid (new)
+    { name = "Arcane Intellect",       spellID = 1459,   class = "MAGE"        },
+    { name = "Battle Shout",           spellID = 6673,   class = "WARRIOR"     },
+    { name = "Power Word: Fortitude",  spellID = 21562,  class = "PRIEST"      },
+    { name = "Mark of the Wild",       spellID = 1126,   class = "DRUID"       },
+    { name = "Source of Magic",        spellID = 369459, class = "EVOKER"      },
+    { name = "Skyfury",                spellID = 462854, class = "SHAMAN"      },
+    { name = "Symbiotic Relationship", spellID = 474754, class = "DRUID"       },
 }
 
 -- Enchantable slots in Midnight: Helmet, Shoulder, Chest, Boots, Rings, Weapons.
@@ -126,8 +128,23 @@ local function HasSoulstone()
     return false
 end
 
+-- Returns a set of class tokens present in the group (including the player).
+local function GetGroupClasses()
+    local classes = {}
+    local _, playerClass = UnitClass("player")
+    classes[playerClass] = true
+    local count = GetNumGroupMembers()
+    for i = 1, count do
+        local unit = IsInRaid() and ("raid"..i) or ("party"..i)
+        if UnitExists(unit) then
+            local _, class = UnitClass(unit)
+            if class then classes[class] = true end
+        end
+    end
+    return classes
+end
+
 -- Blessing of the Bronze: one spell ID per class (381732–381758).
--- Present if player has any of them.
 local function HasBlessingOfBronze()
     for id = 381732, 381758 do
         if HasAuraByID("player", id) then return true end
@@ -136,15 +153,23 @@ local function HasBlessingOfBronze()
 end
 
 local function MissingRaidBuffs()
-    local missing = {}
+    local missing  = {}
+    local classes  = GetGroupClasses()
+
     for _, entry in ipairs(GetRaidBuffList()) do
-        if not HasAuraByID("player", entry.spellID) then
-            table.insert(missing, entry.name)
+        -- Skip if no one in the group plays the class that provides this buff.
+        if not entry.class or classes[entry.class] then
+            if not HasAuraByID("player", entry.spellID) then
+                table.insert(missing, entry.name)
+            end
         end
     end
-    if not HasBlessingOfBronze() then
+
+    -- Blessing of the Bronze — provided by Evoker
+    if classes["EVOKER"] and not HasBlessingOfBronze() then
         table.insert(missing, "Blessing of the Bronze")
     end
+
     return missing
 end
 
