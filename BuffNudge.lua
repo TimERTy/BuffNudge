@@ -32,13 +32,17 @@ local DEFAULT_RAID_BUFFS = {
     { name = "Symbiotic Relationship",spellID = 474754 },  -- Druid (new)
 }
 
--- Gear slots to check for permanent enchants.
+-- Enchantable slots in Midnight: Helmet, Shoulder, Chest, Boots, Rings, Weapons.
+-- Cloak and Bracers are NOT enchantable in Midnight (removed from previous expansions).
 local ENCHANT_SLOTS = {
-    { id = 16, name = "Main Hand" },
-    { id = 17, name = "Off Hand"  },
+    { id =  1, name = "Helmet"    },
+    { id =  3, name = "Shoulder"  },
+    { id =  5, name = "Chest"     },
+    { id =  8, name = "Boots"     },
     { id = 11, name = "Ring 1"    },
     { id = 12, name = "Ring 2"    },
-    { id = 15, name = "Cloak"     },
+    { id = 16, name = "Main Hand" },
+    { id = 17, name = "Off Hand"  },
 }
 
 local ICON_FOOD     = 132950
