@@ -1,4 +1,11 @@
 -- BuffNudgeSetup.lua
+-- Color constants (mirrors BuffNudge.lua)
+local ORANGE = "|cffff9900"
+local GREEN  = "|cff4dff4d"
+local BLUE   = "|cff4dc8ff"
+local YELLOW = "|cffffff00"
+local GREY   = "|cffaaaaaa"
+local RESET  = "|r"
 -- Setup panel: scans your current buffs and lets you tag each one
 -- as Food, Flask, or Raid Buff. Saved to BuffNudgeDB (SavedVariables).
 -- Open with:  /bn setup
@@ -76,7 +83,7 @@ setup:Hide()
 -- Title
 local titleFs = setup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 titleFs:SetPoint("TOP", setup, "TOP", 0, -10)
-titleFs:SetText("|cffff9900BuffNudge|r — Setup")
+titleFs:SetText(ORANGE.."BuffNudge"..RESET.." — Setup")
 
 -- Close button
 local xBtn = CreateFrame("Button", nil, setup, "UIPanelCloseButton")
@@ -101,10 +108,10 @@ local function MakeHeader(text, anchor, xOff)
     fs:SetText(text)
     return fs
 end
-MakeHeader("|cffaaaaааBuff|r",       nil, 34)
-MakeHeader("|cff4dff4dFood|r",       nil, PANEL_W - BTN_W*3 - 24)
-MakeHeader("|cff4dc8ffFlask|r",      nil, PANEL_W - BTN_W*2 - 16)
-MakeHeader("|cffffff00Raid Buff|r",  nil, PANEL_W - BTN_W   -  8)
+MakeHeader(GREY.."Buff"..RESET,      nil, 34)
+MakeHeader(GREEN.."Food"..RESET,     nil, PANEL_W - BTN_W*3 - 24)
+MakeHeader(BLUE.."Flask"..RESET,     nil, PANEL_W - BTN_W*2 - 16)
+MakeHeader(YELLOW.."Raid Buff"..RESET, nil, PANEL_W - BTN_W - 8)
 
 -- Refresh button (re-scan buffs)
 local rescanBtn = CreateFrame("Button", nil, setup, "UIPanelButtonTemplate")
@@ -201,9 +208,11 @@ scrollFrame:SetScrollChild(content)
 -- ============================================================
 
 local function UpdateCounts()
+    -- Invalidate cached ID sets so Refresh picks up the user's new tags.
+    BuffNudge_InvalidateCache()
     local db = BuffNudgeDB
     countsFs:SetText(
-        string.format("|cff4dff4dFood: %d|r   |cff4dc8ffFlask: %d|r   |cffffff00Raid: %d|r",
+        string.format(GREEN.."Food: %d"..RESET.."   "..BLUE.."Flask: %d"..RESET.."   "..YELLOW.."Raid: %d"..RESET,
             #(db.foodIDs   or {}),
             #(db.flaskIDs  or {}),
             #(db.raidBuffs or {}))
@@ -309,7 +318,7 @@ local function Populate()
     UpdateCounts()
 
     if #buffs == 0 then
-        print("|cffff9900BuffNudge:|r No buffs found on your character right now.")
+        print(ORANGE.."BuffNudge:"..RESET.." No buffs found on your character right now.")
     end
 end
 

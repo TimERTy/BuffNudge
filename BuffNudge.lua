@@ -53,6 +53,11 @@ local ICON_STONE    = 136210
 local ICON_ENCHANT  = 136243
 local ICON_RAIDBUFF = 136116
 
+local RED    = "|cffff4444"  -- missing / error
+local ORANGE = "|cffff9900"  -- warning
+local YELLOW = "|cffffff00"  -- raid buff missing
+local RESET  = "|r"
+
 -- ============================================================
 -- SAVED VARIABLES — populated by Setup panel (/bn setup)
 -- ============================================================
@@ -60,38 +65,46 @@ local ICON_RAIDBUFF = 136116
 -- BuffNudgeDB is declared in the TOC and initialised in ADDON_LOADED.
 -- Shape: { foodIDs={}, flaskIDs={}, raidBuffs={ {name,spellID}, ... } }
 
-local function DB()
-    return BuffNudgeDB
+local function DB() return BuffNudgeDB end
+
+-- ============================================================
+-- CACHED ID SETS
+-- Rebuilt once on load and when the Setup panel saves changes.
+-- Using hash sets (id → true) so membership checks are O(1).
+-- ============================================================
+
+local cachedFoodSet, cachedFlaskSet, cachedRaidBuffList
+
+function BuffNudge_InvalidateCache()
+    cachedFoodSet     = nil
+    cachedFlaskSet    = nil
+    cachedRaidBuffList = nil
 end
 
--- Merge default IDs with any the player has captured.
-local function GetFoodIDs()
-    local ids = {}
-    for _, v in ipairs(DEFAULT_FOOD_IDS)    do ids[v] = true end
-    for _, v in ipairs(DB().foodIDs or {})  do ids[v] = true end
-    local out = {}
-    for id in pairs(ids) do table.insert(out, id) end
-    return out
+local function GetFoodSet()
+    if cachedFoodSet then return cachedFoodSet end
+    cachedFoodSet = {}
+    for _, v in ipairs(DEFAULT_FOOD_IDS)   do cachedFoodSet[v] = true end
+    for _, v in ipairs(DB().foodIDs or {}) do cachedFoodSet[v] = true end
+    return cachedFoodSet
 end
 
-local function GetFlaskIDs()
-    local ids = {}
-    for _, v in ipairs(DEFAULT_FLASK_IDS)   do ids[v] = true end
-    for _, v in ipairs(DB().flaskIDs or {}) do ids[v] = true end
-    local out = {}
-    for id in pairs(ids) do table.insert(out, id) end
-    return out
+local function GetFlaskSet()
+    if cachedFlaskSet then return cachedFlaskSet end
+    cachedFlaskSet = {}
+    for _, v in ipairs(DEFAULT_FLASK_IDS)   do cachedFlaskSet[v] = true end
+    for _, v in ipairs(DB().flaskIDs or {}) do cachedFlaskSet[v] = true end
+    return cachedFlaskSet
 end
 
 local function GetRaidBuffList()
+    if cachedRaidBuffList then return cachedRaidBuffList end
     local seen, out = {}, {}
-    for _, e in ipairs(DEFAULT_RAID_BUFFS)       do seen[e.spellID] = true; table.insert(out, e) end
+    for _, e in ipairs(DEFAULT_RAID_BUFFS)   do seen[e.spellID] = true; table.insert(out, e) end
     for _, e in ipairs(DB().raidBuffs or {}) do
-        if not seen[e.spellID] then
-            seen[e.spellID] = true
-            table.insert(out, e)
-        end
+        if not seen[e.spellID] then seen[e.spellID] = true; table.insert(out, e) end
     end
+    cachedRaidBuffList = out
     return out
 end
 
@@ -99,42 +112,25 @@ end
 -- HELPERS
 -- ============================================================
 
-local function HasAuraByID(unit, spellID)
+-- Scan all player buffs once per Refresh and return a spellID → true set.
+-- Every subsequent check does a single O(1) table lookup instead of
+-- re-iterating up to 40 aura slots per spell ID being tested.
+local function GetPlayerAuraSet()
+    local set = {}
     for i = 1, 40 do
-        local aura = C_UnitAuras.GetBuffDataByIndex(unit, i)
+        local aura = C_UnitAuras.GetBuffDataByIndex("player", i)
         if not aura then break end
-        if aura.spellId == spellID then return true end
+        set[aura.spellId] = true
     end
-    return false
+    return set
 end
 
-local function HasAnyAura(unit, ids)
-    for _, id in ipairs(ids) do
-        if HasAuraByID(unit, id) then return true end
-    end
-    return false
-end
-
-local function HasFood()  return HasAnyAura("player", GetFoodIDs())  end
-local function HasFlask() return HasAnyAura("player", GetFlaskIDs()) end
-
-local function HasSoulstone()
-    local SOULSTONE_ID = 20707
-    if HasAuraByID("player", SOULSTONE_ID) then return true end
-    for i = 1, GetNumGroupMembers() do
-        local unit = IsInRaid() and ("raid"..i) or ("party"..i)
-        if UnitExists(unit) and HasAuraByID(unit, SOULSTONE_ID) then return true end
-    end
-    return false
-end
-
--- Returns a set of class tokens present in the group (including the player).
+-- Returns a class-token → true set for everyone in the group.
 local function GetGroupClasses()
     local classes = {}
     local _, playerClass = UnitClass("player")
     classes[playerClass] = true
-    local count = GetNumGroupMembers()
-    for i = 1, count do
+    for i = 1, GetNumGroupMembers() do
         local unit = IsInRaid() and ("raid"..i) or ("party"..i)
         if UnitExists(unit) then
             local _, class = UnitClass(unit)
@@ -144,32 +140,59 @@ local function GetGroupClasses()
     return classes
 end
 
--- Blessing of the Bronze: one spell ID per class (381732–381758).
-local function HasBlessingOfBronze()
-    for id = 381732, 381758 do
-        if HasAuraByID("player", id) then return true end
+local function HasFood(auraSet)
+    for id in pairs(GetFoodSet()) do
+        if auraSet[id] then return true end
     end
     return false
 end
 
-local function MissingRaidBuffs()
-    local missing  = {}
-    local classes  = GetGroupClasses()
+local function HasFlask(auraSet)
+    for id in pairs(GetFlaskSet()) do
+        if auraSet[id] then return true end
+    end
+    return false
+end
 
+local function HasSoulstone(auraSet, groupClasses)
+    -- No Warlock in group = no soulstone possible, skip entirely.
+    if not groupClasses["WARLOCK"] then return true end
+    if auraSet[20707] then return true end
+    -- Scan group members only when necessary.
+    for i = 1, GetNumGroupMembers() do
+        local unit = IsInRaid() and ("raid"..i) or ("party"..i)
+        if UnitExists(unit) then
+            for j = 1, 40 do
+                local aura = C_UnitAuras.GetBuffDataByIndex(unit, j)
+                if not aura then break end
+                if aura.spellId == 20707 then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- Blessing of the Bronze: one ID per class (381732–381758).
+-- With auraSet this is 27 hash lookups instead of 27×40 iterations.
+local function HasBlessingOfBronze(auraSet)
+    for id = 381732, 381758 do
+        if auraSet[id] then return true end
+    end
+    return false
+end
+
+local function MissingRaidBuffs(auraSet, groupClasses)
+    local missing = {}
     for _, entry in ipairs(GetRaidBuffList()) do
-        -- Skip if no one in the group plays the class that provides this buff.
-        if not entry.class or classes[entry.class] then
-            if not HasAuraByID("player", entry.spellID) then
+        if not entry.class or groupClasses[entry.class] then
+            if not auraSet[entry.spellID] then
                 table.insert(missing, entry.name)
             end
         end
     end
-
-    -- Blessing of the Bronze — provided by Evoker
-    if classes["EVOKER"] and not HasBlessingOfBronze() then
+    if groupClasses["EVOKER"] and not HasBlessingOfBronze(auraSet) then
         table.insert(missing, "Blessing of the Bronze")
     end
-
     return missing
 end
 
@@ -214,7 +237,7 @@ panel:Hide()
 
 local titleText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 titleText:SetPoint("TOP", panel, "TOP", 0, -6)
-titleText:SetText("|cffff9900BuffNudge|r")
+titleText:SetText(ORANGE.."BuffNudge"..RESET)
 
 local closeBtn = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
 closeBtn:SetSize(16, 16)
@@ -258,17 +281,20 @@ function BuffNudge_Refresh()
         return
     end
 
+    -- Scan player auras once; all checks below reuse this set.
+    local auraSet     = GetPlayerAuraSet()
+    local groupClasses = GetGroupClasses()
     local items = {}
 
-    if not HasFood()  then table.insert(items, { text="|cffff4444No Food Buff|r",   icon=ICON_FOOD    }) end
-    if not HasFlask() then table.insert(items, { text="|cffff4444No Flask/Phial|r", icon=ICON_FLASK   }) end
-    if not HasSoulstone() then table.insert(items, { text="|cffff9900No Soulstone|r", icon=ICON_STONE }) end
+    if not HasFood(auraSet)                    then table.insert(items, { text=RED..   "No Food Buff"  ..RESET, icon=ICON_FOOD    }) end
+    if not HasFlask(auraSet)                   then table.insert(items, { text=RED..   "No Flask/Phial" ..RESET, icon=ICON_FLASK   }) end
+    if not HasSoulstone(auraSet, groupClasses) then table.insert(items, { text=ORANGE.."No Soulstone"   ..RESET, icon=ICON_STONE   }) end
 
     for _, slot in ipairs(MissingEnchants()) do
-        table.insert(items, { text="|cffff4444Enchant: "..slot.."|r", icon=ICON_ENCHANT })
+        table.insert(items, { text=RED.."Enchant: "..slot..RESET, icon=ICON_ENCHANT })
     end
-    for _, buff in ipairs(MissingRaidBuffs()) do
-        table.insert(items, { text="|cffffff00"..buff.."|r", icon=ICON_RAIDBUFF })
+    for _, buff in ipairs(MissingRaidBuffs(auraSet, groupClasses)) do
+        table.insert(items, { text=YELLOW..buff..RESET, icon=ICON_RAIDBUFF })
     end
 
     if #items == 0 then panel:Hide(); return end
@@ -329,7 +355,7 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
     msg = strtrim(msg:lower())
     if msg == "check" then
         BuffNudge_Refresh()
-        if not panel:IsShown() then print("|cffff9900BuffNudge:|r All good!") end
+        if not panel:IsShown() then print(ORANGE.."BuffNudge:"..RESET.." All good!") end
     elseif msg == "setup" then
         BuffNudgeSetup_Open()
     elseif msg == "hide" then
@@ -337,6 +363,6 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
     elseif msg == "show" then
         panel:Show()
     else
-        print("|cffff9900BuffNudge|r: /bn check | /bn setup | /bn hide | /bn show")
+        print(ORANGE.."BuffNudge"..RESET..": /bn check | /bn setup | /bn hide | /bn show")
     end
 end
