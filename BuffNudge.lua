@@ -311,6 +311,41 @@ function BuffNudge_Refresh()
 end
 
 -- ============================================================
+-- FPS DISPLAY
+-- ============================================================
+
+local fpsFrame = CreateFrame("Frame", "BuffNudgeFPS", UIParent, "BackdropTemplate")
+fpsFrame:SetSize(58, 20)
+fpsFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -16, -16)
+fpsFrame:SetMovable(true)
+fpsFrame:EnableMouse(true)
+fpsFrame:RegisterForDrag("LeftButton")
+fpsFrame:SetScript("OnDragStart", fpsFrame.StartMoving)
+fpsFrame:SetScript("OnDragStop",  fpsFrame.StopMovingOrSizing)
+fpsFrame:SetBackdrop({
+    bgFile   = "Interface/Tooltips/UI-Tooltip-Background",
+    edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+    edgeSize = 8,
+    insets   = { left=2, right=2, top=2, bottom=2 },
+})
+fpsFrame:SetBackdropColor(0, 0, 0, 0.6)
+fpsFrame:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.8)
+
+local fpsText = fpsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+fpsText:SetAllPoints()
+
+local function FpsColor(fps)
+    if fps >= 60 then return GREEN end
+    if fps >= 30 then return YELLOW end
+    return RED
+end
+
+C_Timer.NewTicker(1, function()
+    local fps = math.floor(GetFramerate())
+    fpsText:SetText(FpsColor(fps)..fps..RESET.." fps")
+end)
+
+-- ============================================================
 -- EVENTS
 -- ============================================================
 
@@ -330,6 +365,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         BuffNudgeDB.foodIDs   = BuffNudgeDB.foodIDs   or {}
         BuffNudgeDB.flaskIDs  = BuffNudgeDB.flaskIDs  or {}
         BuffNudgeDB.raidBuffs = BuffNudgeDB.raidBuffs or {}
+        if BuffNudgeDB.fpsHidden then fpsFrame:Hide() end
         return
     end
     if event == "UNIT_AURA" and arg1 ~= "player" then return end
@@ -362,7 +398,15 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
         panel:Hide()
     elseif msg == "show" then
         panel:Show()
+    elseif msg == "fps" then
+        if fpsFrame:IsShown() then
+            fpsFrame:Hide()
+            BuffNudgeDB.fpsHidden = true
+        else
+            fpsFrame:Show()
+            BuffNudgeDB.fpsHidden = false
+        end
     else
-        print(ORANGE.."BuffNudge"..RESET..": /bn check | /bn setup | /bn hide | /bn show")
+        print(ORANGE.."BuffNudge"..RESET..": /bn check | /bn setup | /bn hide | /bn show | /bn fps")
     end
 end
