@@ -52,11 +52,17 @@ local ICON_STONE    = 136210
 local ICON_ENCHANT  = 136243
 local ICON_RAIDBUFF = 136116
 
-local RED    = "|cffff4444"  -- missing / error
-local ORANGE = "|cffff9900"  -- warning
-local YELLOW = "|cffffff00"  -- raid buff missing
-local GREEN  = "|cff4dff4d"  -- good / fps ok
+local RED    = "|cffff4444"
+local ORANGE = "|cffff9900"
+local YELLOW = "|cffffff00"
+local GREEN  = "|cff4dff4d"
 local RESET  = "|r"
+
+-- Pre-built constant item strings — no allocation per Refresh.
+local TEXT_NO_FOOD    = RED.."No Food Buff"..RESET
+local TEXT_NO_FLASK   = RED.."No Flask/Phial"..RESET
+local TEXT_NO_STONE   = ORANGE.."No Soulstone"..RESET
+local TEXT_NO_BRONZE  = YELLOW.."Blessing of the Bronze"..RESET
 
 -- ============================================================
 -- SAVED VARIABLES — populated by Setup panel (/bn setup)
@@ -73,11 +79,15 @@ local RESET  = "|r"
 -- ============================================================
 
 local cachedFoodSet, cachedFlaskSet, cachedRaidBuffs
+local cachedGroupClasses   -- invalidated by GROUP_ROSTER_UPDATE
+local cachedMissingEnchants  -- invalidated by PLAYER_EQUIPMENT_CHANGED
 
 function BuffNudge_InvalidateCache()
-    cachedFoodSet  = nil
-    cachedFlaskSet = nil
-    cachedRaidBuffs = nil
+    cachedFoodSet       = nil
+    cachedFlaskSet      = nil
+    cachedRaidBuffs     = nil
+    cachedGroupClasses  = nil
+    cachedMissingEnchants = nil
 end
 
 local function GetFoodSet()
@@ -107,11 +117,46 @@ local function GetRaidBuffs()
     return out
 end
 
+-- Group classes: rebuilt only when GROUP_ROSTER_UPDATE fires.
+local function GetGroupClasses()
+    if cachedGroupClasses then return cachedGroupClasses end
+    local classes = {}
+    local _, playerClass = UnitClass("player")
+    classes[playerClass] = true
+    local inRaid = IsInRaid()  -- hoist out of loop
+    for i = 1, GetNumGroupMembers() do
+        local unit = inRaid and ("raid"..i) or ("party"..i)
+        if UnitExists(unit) then
+            local _, class = UnitClass(unit)
+            if class then classes[class] = true end
+        end
+    end
+    cachedGroupClasses = classes
+    return classes
+end
+
+-- Enchant results: rebuilt only when PLAYER_EQUIPMENT_CHANGED fires.
+local function GetMissingEnchants()
+    if cachedMissingEnchants then return cachedMissingEnchants end
+    local missing = {}
+    for _, slot in ipairs(ENCHANT_SLOTS) do
+        local link = GetInventoryItemLink("player", slot.id)
+        if link then
+            local enchantID = link:match("|Hitem:%d+:(%d+):")
+            if not enchantID or enchantID == "0" then
+                table.insert(missing, slot.name)
+            end
+        end
+    end
+    cachedMissingEnchants = missing
+    return missing
+end
+
 -- ============================================================
 -- HELPERS
 -- ============================================================
 
--- Scan all player buffs once per Refresh and return a spellID → true set.
+-- Scan all player buffs once per Refresh; returns spellID → true set.
 local function GetPlayerAuraSet()
     local set = {}
     for i = 1, 40 do
@@ -120,21 +165,6 @@ local function GetPlayerAuraSet()
         set[aura.spellId] = true
     end
     return set
-end
-
--- Returns a class-token → true set for everyone in the group including the player.
-local function GetGroupClasses()
-    local classes = {}
-    local _, playerClass = UnitClass("player")
-    classes[playerClass] = true
-    for i = 1, GetNumGroupMembers() do
-        local unit = IsInRaid() and ("raid"..i) or ("party"..i)
-        if UnitExists(unit) then
-            local _, class = UnitClass(unit)
-            if class then classes[class] = true end
-        end
-    end
-    return classes
 end
 
 local function HasFood(auraSet)
@@ -152,10 +182,11 @@ local function HasFlask(auraSet)
 end
 
 local function HasSoulstone(auraSet, groupClasses)
-    if not groupClasses["WARLOCK"] then return true end  -- no warlock, skip
+    if not groupClasses["WARLOCK"] then return true end
     if auraSet[20707] then return true end
+    local inRaid = IsInRaid()  -- hoist out of loop
     for i = 1, GetNumGroupMembers() do
-        local unit = IsInRaid() and ("raid"..i) or ("party"..i)
+        local unit = inRaid and ("raid"..i) or ("party"..i)
         if UnitExists(unit) then
             for j = 1, 40 do
                 local aura = C_UnitAuras.GetBuffDataByIndex(unit, j)
@@ -175,36 +206,54 @@ local function HasBlessingOfBronze(auraSet)
     return false
 end
 
+-- Reusable tables to avoid per-Refresh allocation.
+local itemsBuf   = {}
+local missingBuf = {}
+
 local function MissingRaidBuffs(auraSet, groupClasses)
-    local missing = {}
+    local n = 0
     for _, entry in ipairs(GetRaidBuffs()) do
-        if not entry.class or groupClasses[entry.class] then
-            if not auraSet[entry.spellID] then
-                table.insert(missing, entry.name)
-            end
+        if (not entry.class or groupClasses[entry.class]) and not auraSet[entry.spellID] then
+            n = n + 1
+            missingBuf[n] = YELLOW..entry.name..RESET
         end
     end
     if groupClasses["EVOKER"] and not HasBlessingOfBronze(auraSet) then
-        table.insert(missing, "Blessing of the Bronze")
+        n = n + 1
+        missingBuf[n] = TEXT_NO_BRONZE
     end
-    return missing
+    missingBuf[n + 1] = nil  -- trim any leftover from a prior longer run
+    return missingBuf, n
 end
 
-local function SlotHasEnchant(slotID)
-    local link = GetInventoryItemLink("player", slotID)
-    if not link then return true end
-    local enchantID = link:match("|Hitem:%d+:(%d+):")
-    return enchantID ~= nil and enchantID ~= "0"
+-- ============================================================
+-- REMINDER PANEL
+-- ============================================================
+
+-- ============================================================
+-- EDIT MODE — frames only draggable while Blizzard edit mode is active
+-- ============================================================
+
+local movableFrames = {}  -- registered below after each frame is created
+
+local function SetFrameMovable(frame, enabled)
+    frame:SetMovable(enabled)
+    frame:EnableMouse(enabled)
+    if enabled then
+        frame:RegisterForDrag("LeftButton")
+        frame:SetBackdropBorderColor(1, 0.6, 0, 1)   -- orange highlight
+    else
+        frame:RegisterForDrag()
+        frame:SetBackdropBorderColor(unpack(frame._borderColor))
+    end
 end
 
-local function MissingEnchants()
-    local missing = {}
-    for _, slot in ipairs(ENCHANT_SLOTS) do
-        if not SlotHasEnchant(slot.id) then
-            table.insert(missing, slot.name)
-        end
-    end
-    return missing
+local function OnEditModeEnter()
+    for _, f in ipairs(movableFrames) do SetFrameMovable(f, true) end
+end
+
+local function OnEditModeExit()
+    for _, f in ipairs(movableFrames) do SetFrameMovable(f, false) end
 end
 
 -- ============================================================
@@ -214,15 +263,13 @@ end
 local panel = CreateFrame("Frame", "BuffNudgePanel", UIParent, "BackdropTemplate")
 panel:SetSize(220, 30)
 panel:SetPoint("CENTER", UIParent, "CENTER", 0, 220)
-panel:SetMovable(true)
-panel:EnableMouse(true)
-panel:RegisterForDrag("LeftButton")
+panel:SetMovable(false)
+panel:EnableMouse(false)
 panel:SetScript("OnDragStart", panel.StartMoving)
 panel:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
-    local x, y = self:GetLeft(), self:GetTop()
-    BuffNudgeDB.panelX = x
-    BuffNudgeDB.panelY = y
+    BuffNudgeDB.panelX = self:GetLeft()
+    BuffNudgeDB.panelY = self:GetTop()
 end)
 panel:SetBackdrop({
     bgFile   = "Interface/Tooltips/UI-Tooltip-Background",
@@ -232,6 +279,7 @@ panel:SetBackdrop({
 })
 panel:SetBackdropColor(0, 0, 0, 0.85)
 panel:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+panel._borderColor = { 0.5, 0.5, 0.5, 1 }
 panel:Hide()
 
 local titleText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -280,31 +328,39 @@ function BuffNudge_Refresh()
         return
     end
 
-    local auraSet     = GetPlayerAuraSet()
+    local auraSet      = GetPlayerAuraSet()
     local groupClasses = GetGroupClasses()
-    local items = {}
 
-    if not HasFood(auraSet)                    then table.insert(items, { text=RED..   "No Food Buff"   ..RESET, icon=ICON_FOOD    }) end
-    if not HasFlask(auraSet)                   then table.insert(items, { text=RED..   "No Flask/Phial" ..RESET, icon=ICON_FLASK   }) end
-    if not HasSoulstone(auraSet, groupClasses) then table.insert(items, { text=ORANGE.."No Soulstone"   ..RESET, icon=ICON_STONE   }) end
+    -- Reuse itemsBuf; track count manually to avoid # on sparse table.
+    local n = 0
 
-    for _, slot in ipairs(MissingEnchants()) do
-        table.insert(items, { text=RED.."Enchant: "..slot..RESET, icon=ICON_ENCHANT })
+    if not HasFood(auraSet)                    then n=n+1; itemsBuf[n] = { text=TEXT_NO_FOOD,  icon=ICON_FOOD  } end
+    if not HasFlask(auraSet)                   then n=n+1; itemsBuf[n] = { text=TEXT_NO_FLASK, icon=ICON_FLASK } end
+    if not HasSoulstone(auraSet, groupClasses) then n=n+1; itemsBuf[n] = { text=TEXT_NO_STONE, icon=ICON_STONE } end
+
+    for _, slot in ipairs(GetMissingEnchants()) do
+        n = n + 1
+        itemsBuf[n] = { text=RED.."Enchant: "..slot..RESET, icon=ICON_ENCHANT }
     end
-    for _, buff in ipairs(MissingRaidBuffs(auraSet, groupClasses)) do
-        table.insert(items, { text=YELLOW..buff..RESET, icon=ICON_RAIDBUFF })
+
+    local raidMissing, rCount = MissingRaidBuffs(auraSet, groupClasses)
+    for i = 1, rCount do
+        n = n + 1
+        itemsBuf[n] = { text=raidMissing[i], icon=ICON_RAIDBUFF }
     end
 
-    if #items == 0 then panel:Hide(); return end
+    itemsBuf[n + 1] = nil  -- trim leftovers
 
-    panel:SetHeight(26 + #items * 18)
-    for i, item in ipairs(items) do
+    if n == 0 then panel:Hide(); return end
+
+    panel:SetHeight(26 + n * 18)
+    for i = 1, n do
         local row = GetRow(i)
-        row.text:SetText(item.text)
-        row.icon:SetTexture(item.icon)
+        row.text:SetText(itemsBuf[i].text)
+        row.icon:SetTexture(itemsBuf[i].icon)
         row:Show()
     end
-    HideRowsFrom(#items + 1)
+    HideRowsFrom(n + 1)
     panel:Show()
 end
 
@@ -315,9 +371,8 @@ end
 local fpsFrame = CreateFrame("Frame", "BuffNudgeFPS", UIParent, "BackdropTemplate")
 fpsFrame:SetSize(58, 20)
 fpsFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -16, -16)
-fpsFrame:SetMovable(true)
-fpsFrame:EnableMouse(true)
-fpsFrame:RegisterForDrag("LeftButton")
+fpsFrame:SetMovable(false)
+fpsFrame:EnableMouse(false)
 fpsFrame:SetScript("OnDragStart", fpsFrame.StartMoving)
 fpsFrame:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
@@ -332,9 +387,13 @@ fpsFrame:SetBackdrop({
 })
 fpsFrame:SetBackdropColor(0, 0, 0, 0.6)
 fpsFrame:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.8)
+fpsFrame._borderColor = { 0.3, 0.3, 0.3, 0.8 }
 
 local fpsText = fpsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 fpsText:SetAllPoints()
+
+local fpsTicker
+local lastFpsValue = -1
 
 local function FpsColor(fps)
     if fps >= 60 then return GREEN end
@@ -342,35 +401,65 @@ local function FpsColor(fps)
     return RED
 end
 
-C_Timer.NewTicker(1, function()
-    if not fpsFrame:IsShown() then return end
-    local fps = math.floor(GetFramerate())
-    fpsText:SetText(FpsColor(fps)..fps..RESET.." fps")
-end)
+local function StartFpsTicker()
+    if fpsTicker then return end
+    fpsTicker = C_Timer.NewTicker(1, function()
+        local fps = math.floor(GetFramerate())
+        if fps ~= lastFpsValue then
+            lastFpsValue = fps
+            fpsText:SetText(string.format("%s%d"..RESET.." fps", FpsColor(fps), fps))
+        end
+    end)
+end
+
+local function StopFpsTicker()
+    if fpsTicker then
+        fpsTicker:Cancel()
+        fpsTicker = nil
+        lastFpsValue = -1
+    end
+end
 
 -- ============================================================
 -- EVENTS
 -- ============================================================
 
-local eventFrame   = CreateFrame("Frame")
+-- Register frames for edit mode drag handling.
+movableFrames[1] = panel
+movableFrames[2] = fpsFrame
+
+local eventFrame     = CreateFrame("Frame")
 local refreshPending = false
 
 eventFrame:RegisterEvent("ADDON_LOADED")
+eventFrame:RegisterEvent("EDIT_MODE_ENTER")
+eventFrame:RegisterEvent("EDIT_MODE_EXIT")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("UNIT_AURA")
 
 local lastFire = 0
 eventFrame:SetScript("OnEvent", function(self, event, arg1)
+    if event == "EDIT_MODE_ENTER" then OnEditModeEnter(); return end
+    if event == "EDIT_MODE_EXIT"  then OnEditModeExit();  return end
+
     if event == "ADDON_LOADED" then
         if arg1 ~= "BuffNudge" then return end
         BuffNudgeDB = BuffNudgeDB or {}
+        -- Sync with edit mode if already active when addon loads.
+        if C_EditMode.IsEditModeActive() then OnEditModeEnter() end
         BuffNudgeDB.foodIDs   = BuffNudgeDB.foodIDs   or {}
         BuffNudgeDB.flaskIDs  = BuffNudgeDB.flaskIDs  or {}
         BuffNudgeDB.raidBuffs = BuffNudgeDB.raidBuffs or {}
-        if BuffNudgeDB.fpsHidden then fpsFrame:Hide() end
+        if BuffNudgeDB.fpsHidden then
+            StopFpsTicker()
+            fpsFrame:Hide()
+        else
+            StartFpsTicker()
+        end
         if BuffNudgeDB.panelX then
             panel:ClearAllPoints()
             panel:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", BuffNudgeDB.panelX, BuffNudgeDB.panelY)
@@ -382,7 +471,13 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         return
     end
 
-    if event == "UNIT_AURA" and arg1 ~= "player" then return end
+    if event == "GROUP_ROSTER_UPDATE" then
+        cachedGroupClasses = nil  -- only this cache needs clearing
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" then
+        cachedMissingEnchants = nil  -- only this cache needs clearing
+    elseif event == "UNIT_AURA" and arg1 ~= "player" then
+        return
+    end
 
     local now = GetTime()
     if now - lastFire < 2 then return end
@@ -418,9 +513,11 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
     elseif msg == "fps" then
         if fpsFrame:IsShown() then
             fpsFrame:Hide()
+            StopFpsTicker()
             BuffNudgeDB.fpsHidden = true
         else
             fpsFrame:Show()
+            StartFpsTicker()
             BuffNudgeDB.fpsHidden = false
         end
     else
