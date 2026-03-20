@@ -51,6 +51,7 @@ local ICON_FLASK    = 134840
 local ICON_STONE    = 136210
 local ICON_ENCHANT  = 136243
 local ICON_RAIDBUFF = 136116
+local ICON_PET      = 132584
 
 local RED    = "|cffff4444"
 local ORANGE = "|cffff9900"
@@ -63,6 +64,10 @@ local TEXT_NO_FOOD    = RED.."No Food Buff"..RESET
 local TEXT_NO_FLASK   = RED.."No Flask/Phial"..RESET
 local TEXT_NO_STONE   = ORANGE.."No Soulstone"..RESET
 local TEXT_NO_BRONZE  = YELLOW.."Blessing of the Bronze"..RESET
+local TEXT_NO_PET     = RED.."No Pet"..RESET
+
+local PET_CLASSES = { HUNTER = true, WARLOCK = true }
+local _, PLAYER_CLASS = UnitClass("player")
 
 -- ============================================================
 -- SAVED VARIABLES — populated by Setup panel (/bn setup)
@@ -159,10 +164,13 @@ end
 -- Scan all player buffs once per Refresh; returns spellID → true set.
 local function GetPlayerAuraSet()
     local set = {}
-    for i = 1, 40 do
-        local aura = C_UnitAuras.GetBuffDataByIndex("player", i)
-        if not aura then break end
-        set[aura.spellId] = true
+    local auras = C_UnitAuras.GetUnitAuras("player", "HELPFUL", 100)
+    if auras then
+        for _, aura in ipairs(auras) do
+            if aura.spellId and not issecretvalue(aura.spellId) then
+                set[aura.spellId] = true
+            end
+        end
     end
     return set
 end
@@ -188,10 +196,11 @@ local function HasSoulstone(auraSet, groupClasses)
     for i = 1, GetNumGroupMembers() do
         local unit = inRaid and ("raid"..i) or ("party"..i)
         if UnitExists(unit) then
-            for j = 1, 40 do
-                local aura = C_UnitAuras.GetBuffDataByIndex(unit, j)
-                if not aura then break end
-                if aura.spellId == 20707 then return true end
+            local auras = C_UnitAuras.GetUnitAuras(unit, "HELPFUL", 100)
+            if auras then
+                for _, aura in ipairs(auras) do
+                    if aura.spellId and not issecretvalue(aura.spellId) and aura.spellId == 20707 then return true end
+                end
             end
         end
     end
@@ -277,19 +286,16 @@ panel:SetBackdrop({
     edgeSize = 12,
     insets   = { left=3, right=3, top=3, bottom=3 },
 })
-panel:SetBackdropColor(0, 0, 0, 0.85)
-panel:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
-panel._borderColor = { 0.5, 0.5, 0.5, 1 }
+panel:SetBackdropColor(0, 0, 0, 0)
+panel:SetBackdropBorderColor(0, 0, 0, 0)
+panel._borderColor = { 0, 0, 0, 0 }
 panel:Hide()
-
-local titleText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-titleText:SetPoint("TOP", panel, "TOP", 0, -6)
-titleText:SetText(ORANGE.."BuffNudge"..RESET)
 
 local closeBtn = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
 closeBtn:SetSize(16, 16)
 closeBtn:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -2, -2)
 closeBtn:SetScript("OnClick", function() panel:Hide() end)
+closeBtn:Hide()
 
 local rows = {}
 
@@ -297,8 +303,8 @@ local function GetRow(i)
     if not rows[i] then
         local row = CreateFrame("Frame", nil, panel)
         row:SetHeight(18)
-        row:SetPoint("TOPLEFT",  panel, "TOPLEFT",   8, -20 - (i - 1) * 18)
-        row:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -20 - (i - 1) * 18)
+        row:SetPoint("TOPLEFT",  panel, "TOPLEFT",   8, -4 - (i - 1) * 18)
+        row:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -4 - (i - 1) * 18)
 
         local icon = row:CreateTexture(nil, "ARTWORK")
         icon:SetSize(14, 14)
@@ -321,9 +327,11 @@ local function HideRowsFrom(from)
     for i = from, #rows do rows[i]:Hide() end
 end
 
+local debugMode = false
+
 function BuffNudge_Refresh()
     local _, instanceType = IsInInstance()
-    if instanceType ~= "raid" and instanceType ~= "party" then
+    if not debugMode and instanceType ~= "raid" and instanceType ~= "party" then
         panel:Hide()
         return
     end
@@ -334,9 +342,10 @@ function BuffNudge_Refresh()
     -- Reuse itemsBuf; track count manually to avoid # on sparse table.
     local n = 0
 
-    if not HasFood(auraSet)                    then n=n+1; itemsBuf[n] = { text=TEXT_NO_FOOD,  icon=ICON_FOOD  } end
-    if not HasFlask(auraSet)                   then n=n+1; itemsBuf[n] = { text=TEXT_NO_FLASK, icon=ICON_FLASK } end
-    if not HasSoulstone(auraSet, groupClasses) then n=n+1; itemsBuf[n] = { text=TEXT_NO_STONE, icon=ICON_STONE } end
+    if not HasFood(auraSet)                            then n=n+1; itemsBuf[n] = { text=TEXT_NO_FOOD,  icon=ICON_FOOD  } end
+    if not HasFlask(auraSet)                           then n=n+1; itemsBuf[n] = { text=TEXT_NO_FLASK, icon=ICON_FLASK } end
+    if not HasSoulstone(auraSet, groupClasses)         then n=n+1; itemsBuf[n] = { text=TEXT_NO_STONE, icon=ICON_STONE } end
+    if PET_CLASSES[PLAYER_CLASS] and not UnitExists("pet") then n=n+1; itemsBuf[n] = { text=TEXT_NO_PET, icon=ICON_PET } end
 
     for _, slot in ipairs(GetMissingEnchants()) do
         n = n + 1
@@ -353,7 +362,7 @@ function BuffNudge_Refresh()
 
     if n == 0 then panel:Hide(); return end
 
-    panel:SetHeight(26 + n * 18)
+    panel:SetHeight(8 + n * 18)
     for i = 1, n do
         local row = GetRow(i)
         row.text:SetText(itemsBuf[i].text)
@@ -431,15 +440,22 @@ movableFrames[2] = fpsFrame
 local eventFrame     = CreateFrame("Frame")
 local refreshPending = false
 
-eventFrame:RegisterEvent("ADDON_LOADED")
-eventFrame:RegisterEvent("EDIT_MODE_ENTER")
-eventFrame:RegisterEvent("EDIT_MODE_EXIT")
-eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
-eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-eventFrame:RegisterEvent("UNIT_AURA")
+local function safeRegister(event)
+    local ok, err = pcall(eventFrame.RegisterEvent, eventFrame, event)
+    if not ok then
+        print("BuffNudge: skipping unknown event: " .. event)
+    end
+end
+
+safeRegister("ADDON_LOADED")
+safeRegister("EDIT_MODE_ENTER")
+safeRegister("EDIT_MODE_EXIT")
+safeRegister("PLAYER_ENTERING_WORLD")
+safeRegister("ZONE_CHANGED_NEW_AREA")
+safeRegister("GROUP_ROSTER_UPDATE")
+safeRegister("PLAYER_EQUIPMENT_CHANGED")
+safeRegister("PLAYER_REGEN_ENABLED")
+safeRegister("UNIT_AURA")
 
 local lastFire = 0
 eventFrame:SetScript("OnEvent", function(self, event, arg1)
@@ -450,7 +466,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         if arg1 ~= "BuffNudge" then return end
         BuffNudgeDB = BuffNudgeDB or {}
         -- Sync with edit mode if already active when addon loads.
-        if C_EditMode.IsEditModeActive() then OnEditModeEnter() end
+        if C_EditMode and C_EditMode.IsEditModeActive and C_EditMode.IsEditModeActive() then OnEditModeEnter() end
         BuffNudgeDB.foodIDs   = BuffNudgeDB.foodIDs   or {}
         BuffNudgeDB.flaskIDs  = BuffNudgeDB.flaskIDs  or {}
         BuffNudgeDB.raidBuffs = BuffNudgeDB.raidBuffs or {}
@@ -510,6 +526,14 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
         panel:Hide()
     elseif msg == "show" then
         panel:Show()
+    elseif msg == "move" then
+        local moving = not panel:IsMovable()
+        for _, f in ipairs(movableFrames) do SetFrameMovable(f, moving) end
+        print(ORANGE.."BuffNudge:"..RESET.." Move mode "..(moving and GREEN.."ON"..RESET.." — drag frames to reposition" or RED.."OFF"..RESET))
+    elseif msg == "debug" then
+        debugMode = not debugMode
+        print(ORANGE.."BuffNudge:"..RESET.." Debug mode "..(debugMode and GREEN.."ON"..RESET or RED.."OFF"..RESET))
+        BuffNudge_Refresh()
     elseif msg == "fps" then
         if fpsFrame:IsShown() then
             fpsFrame:Hide()
@@ -521,6 +545,6 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
             BuffNudgeDB.fpsHidden = false
         end
     else
-        print(ORANGE.."BuffNudge"..RESET..": /bn check | /bn setup | /bn hide | /bn show | /bn fps")
+        print(ORANGE.."BuffNudge"..RESET..": /bn check | /bn setup | /bn move | /bn hide | /bn show | /bn fps | /bn debug")
     end
 end

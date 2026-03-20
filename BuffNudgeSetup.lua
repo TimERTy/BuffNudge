@@ -45,14 +45,15 @@ end
 
 local function ScanBuffs()
     local buffs = {}
-    for i = 1, 40 do
-        local aura = C_UnitAuras.GetBuffDataByIndex("player", i)
-        if not aura then break end
-        table.insert(buffs, {
-            name    = aura.name,
-            icon    = aura.icon,
-            spellID = aura.spellId,
-        })
+    local auras = C_UnitAuras.GetUnitAuras("player", "HELPFUL", 100)
+    if auras then
+        for _, aura in ipairs(auras) do
+            table.insert(buffs, {
+                name    = aura.name,
+                icon    = aura.icon,
+                spellID = aura.spellId,
+            })
+        end
     end
     return buffs
 end
