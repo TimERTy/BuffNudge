@@ -21,6 +21,9 @@ ns.DEFAULT_FLASK_IDS = {
     1230878,  -- Flask of the Shattered Sun  (Critical Strike)
 }
 
+-- Healthstone item IDs checked via GetItemCount.
+ns.DEFAULT_HEALTHSTONE_ITEM_IDS = { 5512 }  -- Healthstone (variants caught by name scan in HasHealthstone)
+
 -- Confirmed Midnight raid buff spell IDs (flagged non-secret by Blizzard).
 -- class: WoW class token from UnitClass() — warning skipped if class absent from group.
 ns.DEFAULT_RAID_BUFFS = {
@@ -31,6 +34,25 @@ ns.DEFAULT_RAID_BUFFS = {
     { name = "Source of Magic",        spellID = 369459, class = "EVOKER"  },
     { name = "Skyfury",                spellID = 462854, class = "SHAMAN"  },
     { name = "Symbiotic Relationship", spellID = 474754, class = "DRUID"   },
+}
+
+-- All slots that can carry gem sockets. C_Item.GetItemStats returns EMPTY_SOCKET_* keys
+-- only for slots that actually have sockets, so checking extras costs nothing.
+ns.SOCKET_SLOTS = {
+    { id =  1, name = "Helmet"    },
+    { id =  2, name = "Neck"      },
+    { id =  3, name = "Shoulder"  },
+    { id =  5, name = "Chest"     },
+    { id =  6, name = "Waist"     },
+    { id =  7, name = "Legs"      },
+    { id =  8, name = "Feet"      },
+    { id =  9, name = "Wrist"     },
+    { id = 10, name = "Hands"     },
+    { id = 11, name = "Ring 1"    },
+    { id = 12, name = "Ring 2"    },
+    { id = 15, name = "Back"      },
+    { id = 16, name = "Main Hand" },
+    { id = 17, name = "Off Hand"  },
 }
 
 -- Enchantable slots in Midnight: Helmet, Shoulder, Chest, Boots, Rings, Weapons.
@@ -55,6 +77,8 @@ ns.ICON_STONE    = 136210
 ns.ICON_ENCHANT  = 136243
 ns.ICON_RAIDBUFF = 136116
 ns.ICON_PET      = 132584
+ns.ICON_SOCKET      = "Interface/ItemSocketingFrame/UI-EmptySocket-Prismatic"
+ns.ICON_HEALTHSTONE = C_Item.GetItemIconByID(5512) or 460786  -- Healthstone item icon
 
 -- ============================================================
 -- COLOURS
@@ -75,7 +99,8 @@ ns.TEXT_NO_FOOD   = R.."No Food Buff"..Z
 ns.TEXT_NO_FLASK  = R.."No Flask/Phial"..Z
 ns.TEXT_NO_STONE  = O.."No Soulstone"..Z
 ns.TEXT_NO_BRONZE = Y.."Blessing of the Bronze"..Z
-ns.TEXT_NO_PET    = R.."No Pet"..Z
+ns.TEXT_NO_PET          = R.."No Pet"..Z
+ns.TEXT_NO_HEALTHSTONE  = R.."No Healthstone"..Z
 
 -- ============================================================
 -- PLAYER
@@ -109,4 +134,5 @@ ns.EVENTS = {
     UNIT_AURA                = "UNIT_AURA",
     EDIT_MODE_ENTER          = "EDIT_MODE_ENTER",
     EDIT_MODE_EXIT           = "EDIT_MODE_EXIT",
+    BAG_UPDATE_DELAYED       = "BAG_UPDATE_DELAYED",
 }

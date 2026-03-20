@@ -4,6 +4,7 @@
 ## Version: 1.0
 ## Author: TimERTy
 ## SavedVariables: BuffNudgeDB
+## IconTexture: Interface/Icons/Spell_Holy_WordFortitude
 
 BuffNudgeConstants.lua
 BuffNudge.lua
