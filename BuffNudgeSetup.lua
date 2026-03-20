@@ -1,11 +1,11 @@
 -- BuffNudgeSetup.lua
--- Color constants (mirrors BuffNudge.lua)
-local ORANGE = "|cffff9900"
-local GREEN  = "|cff4dff4d"
-local BLUE   = "|cff4dc8ff"
-local YELLOW = "|cffffff00"
-local GREY   = "|cffaaaaaa"
-local RESET  = "|r"
+local _, ns = ...
+local ORANGE = ns.ORANGE
+local GREEN  = ns.GREEN
+local BLUE   = ns.BLUE
+local YELLOW = ns.YELLOW
+local GREY   = ns.GREY
+local RESET  = ns.RESET
 -- Setup panel: scans your current buffs and lets you tag each one
 -- as Food, Flask, or Raid Buff. Saved to BuffNudgeDB (SavedVariables).
 -- Open with:  /bn setup

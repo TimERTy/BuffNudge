@@ -1,73 +1,37 @@
 -- BuffNudge.lua
 -- Reminds you about missing food, flask/phial, soulstone, enchants,
 -- and raid buffs when entering a dungeon or raid instance.
+local _, ns = ...
 
--- ============================================================
--- DEFAULTS — fallback IDs until you capture your own via /bn setup
--- ============================================================
+local DEFAULT_FOOD_IDS  = ns.DEFAULT_FOOD_IDS
+local DEFAULT_FLASK_IDS = ns.DEFAULT_FLASK_IDS
+local DEFAULT_RAID_BUFFS = ns.DEFAULT_RAID_BUFFS
+local ENCHANT_SLOTS     = ns.ENCHANT_SLOTS
 
--- NOTE: Midnight has 80+ Hearty Well Fed variants (IDs 454188–1285644+).
--- Use /bn setup to tag your specific food buff — defaults here cover common bases only.
-local DEFAULT_FOOD_IDS = {
-    462186,  -- Hearty Well Fed (base)
-    57399,   -- Well Fed (older fallback)
-}
+local ICON_FOOD     = ns.ICON_FOOD
+local ICON_FLASK    = ns.ICON_FLASK
+local ICON_STONE    = ns.ICON_STONE
+local ICON_ENCHANT  = ns.ICON_ENCHANT
+local ICON_RAIDBUFF = ns.ICON_RAIDBUFF
+local ICON_PET      = ns.ICON_PET
 
--- All four Midnight stat flasks. Use /bn setup if you use a cauldron variant.
-local DEFAULT_FLASK_IDS = {
-    1235108,  -- Flask of the Magisters      (Mastery)
-    1235110,  -- Flask of the Blood Knights  (Haste)
-    1235057,  -- Flask of Thalassian Resistance (Versatility)
-    1230878,  -- Flask of the Shattered Sun  (Critical Strike)
-}
+local RED    = ns.RED
+local ORANGE = ns.ORANGE
+local YELLOW = ns.YELLOW
+local GREEN  = ns.GREEN
+local RESET  = ns.RESET
 
--- Confirmed Midnight raid buff spell IDs (flagged non-secret by Blizzard).
--- class: WoW class token from UnitClass() — warning skipped if class absent from group.
-local DEFAULT_RAID_BUFFS = {
-    { name = "Arcane Intellect",       spellID = 1459,   class = "MAGE"    },
-    { name = "Battle Shout",           spellID = 6673,   class = "WARRIOR" },
-    { name = "Power Word: Fortitude",  spellID = 21562,  class = "PRIEST"  },
-    { name = "Mark of the Wild",       spellID = 1126,   class = "DRUID"   },
-    { name = "Source of Magic",        spellID = 369459, class = "EVOKER"  },
-    { name = "Skyfury",                spellID = 462854, class = "SHAMAN"  },
-    { name = "Symbiotic Relationship", spellID = 474754, class = "DRUID"   },
-}
+local TEXT_NO_FOOD   = ns.TEXT_NO_FOOD
+local TEXT_NO_FLASK  = ns.TEXT_NO_FLASK
+local TEXT_NO_STONE  = ns.TEXT_NO_STONE
+local TEXT_NO_BRONZE = ns.TEXT_NO_BRONZE
+local TEXT_NO_PET    = ns.TEXT_NO_PET
 
--- Enchantable slots in Midnight: Helmet, Shoulder, Chest, Boots, Rings, Weapons.
--- Cloak and Bracers are NOT enchantable in Midnight.
-local ENCHANT_SLOTS = {
-    { id =  1, name = "Helmet"    },
-    { id =  3, name = "Shoulder"  },
-    { id =  5, name = "Chest"     },
-    { id =  8, name = "Boots"     },
-    { id = 11, name = "Ring 1"    },
-    { id = 12, name = "Ring 2"    },
-    { id = 16, name = "Main Hand" },
-    { id = 17, name = "Off Hand"  },
-}
-
-local ICON_FOOD     = 132950
-local ICON_FLASK    = 134840
-local ICON_STONE    = 136210
-local ICON_ENCHANT  = 136243
-local ICON_RAIDBUFF = 136116
-local ICON_PET      = 132584
-
-local RED    = "|cffff4444"
-local ORANGE = "|cffff9900"
-local YELLOW = "|cffffff00"
-local GREEN  = "|cff4dff4d"
-local RESET  = "|r"
-
--- Pre-built constant item strings — no allocation per Refresh.
-local TEXT_NO_FOOD    = RED.."No Food Buff"..RESET
-local TEXT_NO_FLASK   = RED.."No Flask/Phial"..RESET
-local TEXT_NO_STONE   = ORANGE.."No Soulstone"..RESET
-local TEXT_NO_BRONZE  = YELLOW.."Blessing of the Bronze"..RESET
-local TEXT_NO_PET     = RED.."No Pet"..RESET
-
-local PET_CLASSES = { HUNTER = true, WARLOCK = true }
+local PET_CLASSES = ns.PET_CLASSES
 local _, PLAYER_CLASS = UnitClass("player")
+
+local EVENTS = ns.EVENTS
+local CMD    = ns.CMD
 
 -- ============================================================
 -- SAVED VARIABLES — populated by Setup panel (/bn setup)
@@ -78,14 +42,17 @@ local _, PLAYER_CLASS = UnitClass("player")
 --          fpsHidden=bool, panelX=n, panelY=n, fpsX=n, fpsY=n }
 
 -- ============================================================
--- CACHED ID SETS
--- Rebuilt once on load and when the Setup panel saves changes.
--- Hash sets (id → true) so membership checks are O(1).
+-- CACHES
+-- Rebuilt on load and when the Setup panel saves changes.
+-- foodSet/flaskSet are spellID → true hash sets for O(1) lookups.
+-- groupClasses, raidBuffs, and missingEnchants are arrays/sets rebuilt
+-- only when their respective invalidation events fire.
 -- ============================================================
 
 local cachedFoodSet, cachedFlaskSet, cachedRaidBuffs
-local cachedGroupClasses   -- invalidated by GROUP_ROSTER_UPDATE
-local cachedMissingEnchants  -- invalidated by PLAYER_EQUIPMENT_CHANGED
+local cachedGroupClasses    -- invalidated by GROUP_ROSTER_UPDATE
+local cachedMissingEnchants -- invalidated by PLAYER_EQUIPMENT_CHANGED
+local cachedSoulstone       -- invalidated by GROUP_ROSTER_UPDATE
 
 function BuffNudge_InvalidateCache()
     cachedFoodSet       = nil
@@ -93,6 +60,7 @@ function BuffNudge_InvalidateCache()
     cachedRaidBuffs     = nil
     cachedGroupClasses  = nil
     cachedMissingEnchants = nil
+    cachedSoulstone     = nil
 end
 
 local function GetFoodSet()
@@ -161,18 +129,21 @@ end
 -- HELPERS
 -- ============================================================
 
--- Scan all player buffs once per Refresh; returns spellID → true set.
+-- Reused across Refresh calls to avoid per-call allocation.
+local playerAuraSet = {}
+
+-- Clears and repopulates playerAuraSet with current player buffs.
 local function GetPlayerAuraSet()
-    local set = {}
+    for k in next, playerAuraSet do playerAuraSet[k] = nil end
     local auras = C_UnitAuras.GetUnitAuras("player", "HELPFUL", 100)
     if auras then
         for _, aura in ipairs(auras) do
             if aura.spellId and not issecretvalue(aura.spellId) then
-                set[aura.spellId] = true
+                playerAuraSet[aura.spellId] = true
             end
         end
     end
-    return set
+    return playerAuraSet
 end
 
 local function HasFood(auraSet)
@@ -191,19 +162,25 @@ end
 
 local function HasSoulstone(auraSet, groupClasses)
     if not groupClasses["WARLOCK"] then return true end
-    if auraSet[20707] then return true end
-    local inRaid = IsInRaid()  -- hoist out of loop
+    if auraSet[20707] then return true end  -- player has it (fresh from auraSet each Refresh)
+    if cachedSoulstone ~= nil then return cachedSoulstone end
+    -- Scan group members — result cached until GROUP_ROSTER_UPDATE.
+    local inRaid = IsInRaid()
     for i = 1, GetNumGroupMembers() do
         local unit = inRaid and ("raid"..i) or ("party"..i)
         if UnitExists(unit) then
             local auras = C_UnitAuras.GetUnitAuras(unit, "HELPFUL", 100)
             if auras then
                 for _, aura in ipairs(auras) do
-                    if aura.spellId and not issecretvalue(aura.spellId) and aura.spellId == 20707 then return true end
+                    if aura.spellId and not issecretvalue(aura.spellId) and aura.spellId == 20707 then
+                        cachedSoulstone = true
+                        return true
+                    end
                 end
             end
         end
     end
+    cachedSoulstone = false
     return false
 end
 
@@ -215,9 +192,11 @@ local function HasBlessingOfBronze(auraSet)
     return false
 end
 
--- Reusable tables to avoid per-Refresh allocation.
+-- Pre-allocated buffers — entries reused each Refresh, no table allocation in hot path.
+-- Max items: food(1) + flask(1) + stone(1) + pet(1) + enchants(8) + raid buffs(8) = 20.
 local itemsBuf   = {}
 local missingBuf = {}
+for i = 1, 20 do itemsBuf[i] = { text = "", icon = 0 } end
 
 local function MissingRaidBuffs(auraSet, groupClasses)
     local n = 0
@@ -236,11 +215,7 @@ local function MissingRaidBuffs(auraSet, groupClasses)
 end
 
 -- ============================================================
--- REMINDER PANEL
--- ============================================================
-
--- ============================================================
--- EDIT MODE — frames only draggable while Blizzard edit mode is active
+-- DRAG SUPPORT — frames movable via /bn move (edit mode events unavailable in 120001)
 -- ============================================================
 
 local movableFrames = {}  -- registered below after each frame is created
@@ -328,6 +303,7 @@ local function HideRowsFrom(from)
 end
 
 local debugMode = false
+local inCombat   = UnitAffectingCombat("player")
 
 function BuffNudge_Refresh()
     local _, instanceType = IsInInstance()
@@ -342,21 +318,21 @@ function BuffNudge_Refresh()
     -- Reuse itemsBuf; track count manually to avoid # on sparse table.
     local n = 0
 
-    if not HasFood(auraSet)                            then n=n+1; itemsBuf[n] = { text=TEXT_NO_FOOD,  icon=ICON_FOOD  } end
-    if not HasFlask(auraSet)                           then n=n+1; itemsBuf[n] = { text=TEXT_NO_FLASK, icon=ICON_FLASK } end
-    if not HasSoulstone(auraSet, groupClasses)         then n=n+1; itemsBuf[n] = { text=TEXT_NO_STONE, icon=ICON_STONE } end
-    if PET_CLASSES[PLAYER_CLASS] and not UnitExists("pet") then n=n+1; itemsBuf[n] = { text=TEXT_NO_PET, icon=ICON_PET } end
+    local function push(text, icon) n=n+1; itemsBuf[n].text=text; itemsBuf[n].icon=icon end
 
-    for _, slot in ipairs(GetMissingEnchants()) do
-        n = n + 1
-        itemsBuf[n] = { text=RED.."Enchant: "..slot..RESET, icon=ICON_ENCHANT }
+    if not inCombat and not HasFood(auraSet)               then push(TEXT_NO_FOOD,  ICON_FOOD)  end
+    if not HasFlask(auraSet)                               then push(TEXT_NO_FLASK, ICON_FLASK) end
+    if not HasSoulstone(auraSet, groupClasses)             then push(TEXT_NO_STONE, ICON_STONE) end
+    if PET_CLASSES[PLAYER_CLASS] and not UnitExists("pet") then push(TEXT_NO_PET,   ICON_PET)   end
+
+    if not inCombat then
+        for _, slot in ipairs(GetMissingEnchants()) do
+            push(RED.."Enchant: "..slot..RESET, ICON_ENCHANT)
+        end
     end
 
     local raidMissing, rCount = MissingRaidBuffs(auraSet, groupClasses)
-    for i = 1, rCount do
-        n = n + 1
-        itemsBuf[n] = { text=raidMissing[i], icon=ICON_RAIDBUFF }
-    end
+    for i = 1, rCount do push(raidMissing[i], ICON_RAIDBUFF) end
 
     itemsBuf[n + 1] = nil  -- trim leftovers
 
@@ -433,7 +409,7 @@ end
 -- EVENTS
 -- ============================================================
 
--- Register frames for edit mode drag handling.
+-- Frames registered for drag support (/bn move toggles movability).
 movableFrames[1] = panel
 movableFrames[2] = fpsFrame
 
@@ -447,25 +423,26 @@ local function safeRegister(event)
     end
 end
 
-safeRegister("ADDON_LOADED")
-safeRegister("EDIT_MODE_ENTER")
-safeRegister("EDIT_MODE_EXIT")
-safeRegister("PLAYER_ENTERING_WORLD")
-safeRegister("ZONE_CHANGED_NEW_AREA")
-safeRegister("GROUP_ROSTER_UPDATE")
-safeRegister("PLAYER_EQUIPMENT_CHANGED")
-safeRegister("PLAYER_REGEN_ENABLED")
-safeRegister("UNIT_AURA")
+safeRegister(EVENTS.ADDON_LOADED)
+safeRegister(EVENTS.EDIT_MODE_ENTER)
+safeRegister(EVENTS.EDIT_MODE_EXIT)
+safeRegister(EVENTS.PLAYER_ENTERING_WORLD)
+safeRegister(EVENTS.ZONE_CHANGED_NEW_AREA)
+safeRegister(EVENTS.GROUP_ROSTER_UPDATE)
+safeRegister(EVENTS.PLAYER_EQUIPMENT_CHANGED)
+safeRegister(EVENTS.PLAYER_REGEN_ENABLED)
+safeRegister(EVENTS.PLAYER_REGEN_DISABLED)
+safeRegister(EVENTS.UNIT_AURA)
 
 local lastFire = 0
 eventFrame:SetScript("OnEvent", function(self, event, arg1)
-    if event == "EDIT_MODE_ENTER" then OnEditModeEnter(); return end
-    if event == "EDIT_MODE_EXIT"  then OnEditModeExit();  return end
+    if event == EVENTS.EDIT_MODE_ENTER then OnEditModeEnter(); return end
+    if event == EVENTS.EDIT_MODE_EXIT  then OnEditModeExit();  return end
 
-    if event == "ADDON_LOADED" then
+    if event == EVENTS.ADDON_LOADED then
         if arg1 ~= "BuffNudge" then return end
         BuffNudgeDB = BuffNudgeDB or {}
-        -- Sync with edit mode if already active when addon loads.
+        inCombat = UnitAffectingCombat("player")  -- sync in case addon loaded mid-combat
         if C_EditMode and C_EditMode.IsEditModeActive and C_EditMode.IsEditModeActive() then OnEditModeEnter() end
         BuffNudgeDB.foodIDs   = BuffNudgeDB.foodIDs   or {}
         BuffNudgeDB.flaskIDs  = BuffNudgeDB.flaskIDs  or {}
@@ -487,11 +464,18 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         return
     end
 
-    if event == "GROUP_ROSTER_UPDATE" then
-        cachedGroupClasses = nil  -- only this cache needs clearing
-    elseif event == "PLAYER_EQUIPMENT_CHANGED" then
-        cachedMissingEnchants = nil  -- only this cache needs clearing
-    elseif event == "UNIT_AURA" and arg1 ~= "player" then
+    if event == EVENTS.PLAYER_REGEN_DISABLED then
+        inCombat = true
+        BuffNudge_Refresh()  -- bypass debounce: hide out-of-combat rows immediately
+        return
+    elseif event == EVENTS.PLAYER_REGEN_ENABLED then
+        inCombat = false
+    elseif event == EVENTS.GROUP_ROSTER_UPDATE then
+        cachedGroupClasses = nil
+        cachedSoulstone    = nil
+    elseif event == EVENTS.PLAYER_EQUIPMENT_CHANGED then
+        cachedMissingEnchants = nil
+    elseif event == EVENTS.UNIT_AURA and arg1 ~= "player" then
         return
     end
 
@@ -517,24 +501,24 @@ SLASH_BUFFNUDGE2 = "/bn"
 
 SlashCmdList["BUFFNUDGE"] = function(msg)
     msg = strtrim(msg:lower())
-    if msg == "check" then
+    if msg == CMD.CHECK then
         BuffNudge_Refresh()
         if not panel:IsShown() then print(ORANGE.."BuffNudge:"..RESET.." All good!") end
-    elseif msg == "setup" then
+    elseif msg == CMD.SETUP then
         BuffNudgeSetup_Open()
-    elseif msg == "hide" then
+    elseif msg == CMD.HIDE then
         panel:Hide()
-    elseif msg == "show" then
+    elseif msg == CMD.SHOW then
         panel:Show()
-    elseif msg == "move" then
+    elseif msg == CMD.MOVE then
         local moving = not panel:IsMovable()
         for _, f in ipairs(movableFrames) do SetFrameMovable(f, moving) end
         print(ORANGE.."BuffNudge:"..RESET.." Move mode "..(moving and GREEN.."ON"..RESET.." — drag frames to reposition" or RED.."OFF"..RESET))
-    elseif msg == "debug" then
+    elseif msg == CMD.DEBUG then
         debugMode = not debugMode
         print(ORANGE.."BuffNudge:"..RESET.." Debug mode "..(debugMode and GREEN.."ON"..RESET or RED.."OFF"..RESET))
         BuffNudge_Refresh()
-    elseif msg == "fps" then
+    elseif msg == CMD.FPS then
         if fpsFrame:IsShown() then
             fpsFrame:Hide()
             StopFpsTicker()
@@ -545,6 +529,9 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
             BuffNudgeDB.fpsHidden = false
         end
     else
-        print(ORANGE.."BuffNudge"..RESET..": /bn check | /bn setup | /bn move | /bn hide | /bn show | /bn fps | /bn debug")
+        local cmds = {}
+        for _, v in pairs(CMD) do cmds[#cmds+1] = "/bn "..v end
+        table.sort(cmds)
+        print(ORANGE.."BuffNudge"..RESET..": "..table.concat(cmds, " | "))
     end
 end
