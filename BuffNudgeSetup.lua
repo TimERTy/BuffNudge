@@ -289,11 +289,8 @@ resetPanelBtn:SetText("Reset Reminder Panel")
 resetPanelBtn:SetScript("OnClick", function()
     BuffNudgeDB.panelX = nil
     BuffNudgeDB.panelY = nil
-    local f = _G["BuffNudgePanel"]
-    if f then
-        f:ClearAllPoints()
-        f:SetPoint("CENTER", UIParent, "CENTER", 0, 220)
-    end
+    ns.ReminderPanel:ClearAllPoints()
+    ns.ReminderPanel:SetPoint("CENTER", UIParent, "CENTER", 0, 220)
     print(ORANGE.."BuffNudge:"..RESET.." Reminder panel position reset.")
 end)
 
@@ -304,11 +301,8 @@ resetFpsBtn:SetText("Reset FPS Frame")
 resetFpsBtn:SetScript("OnClick", function()
     BuffNudgeDB.fpsX = nil
     BuffNudgeDB.fpsY = nil
-    local f = _G["BuffNudgeFPS"]
-    if f then
-        f:ClearAllPoints()
-        f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -16, -16)
-    end
+    ns.FpsFrame:ClearAllPoints()
+    ns.FpsFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -16, -16)
     print(ORANGE.."BuffNudge:"..RESET.." FPS frame position reset.")
 end)
 
@@ -319,11 +313,8 @@ resetRaidBtn:SetText("Reset Raid Panel")
 resetRaidBtn:SetScript("OnClick", function()
     BuffNudgeDB.raidPanelX = nil
     BuffNudgeDB.raidPanelY = nil
-    local f = _G["BuffNudgeRaidPanel"]
-    if f then
-        f:ClearAllPoints()
-        f:SetPoint("CENTER", UIParent, "CENTER", 120, 220)
-    end
+    ns.RaidPanel:ClearAllPoints()
+    ns.RaidPanel:SetPoint("CENTER", UIParent, "CENTER", 120, 220)
     print(ORANGE.."BuffNudge:"..RESET.." Raid buff panel position reset.")
 end)
 
@@ -339,7 +330,7 @@ local scaleLbl = settingsTab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 scaleLbl:SetPoint("TOPLEFT", settingsTab, "TOPLEFT", 12, -270)
 scaleLbl:SetText(ORANGE.."Scale"..RESET)
 
-local function MakeScaleControl(x, y, label, dbKey, frameName, posX, posY)
+local function MakeScaleControl(x, y, label, dbKey, frame, posX, posY)
     local lbl = settingsTab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     lbl:SetPoint("TOPLEFT", settingsTab, "TOPLEFT", x, y)
     lbl:SetText(label)
@@ -365,33 +356,30 @@ local function MakeScaleControl(x, y, label, dbKey, frameName, posX, posY)
         local new = math.max(0.5, math.min(2.0, math.floor((cur + delta) * 10 + 0.5) / 10))
         BuffNudgeDB[dbKey] = new
         valFS:SetText(string.format("%.1f", new))
-        local f = _G[frameName]
-        if f then
-            -- Preserve visual centre: anchor is fixed, so frame grows from TOPLEFT.
-            -- Compute visual centre with the CURRENT scale, then re-anchor after.
-            local left = f:GetLeft() or 0
-            local top  = f:GetTop()  or 0
-            local w    = f:GetWidth()
-            local h    = f:GetHeight()
-            local cx   = left + w * cur * 0.5
-            local cy   = top  - h * cur * 0.5
-            f:SetScale(new)
-            local nx = cx - w * new * 0.5
-            local ny = cy + h * new * 0.5
-            f:ClearAllPoints()
-            f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", nx, ny)
-            BuffNudgeDB[posX] = nx
-            BuffNudgeDB[posY] = ny
-        end
+        -- Preserve visual centre: anchor is fixed, so frame grows from TOPLEFT.
+        -- Compute visual centre with the CURRENT scale, then re-anchor after.
+        local left = frame:GetLeft() or 0
+        local top  = frame:GetTop()  or 0
+        local w    = frame:GetWidth()
+        local h    = frame:GetHeight()
+        local cx   = left + w * cur * 0.5
+        local cy   = top  - h * cur * 0.5
+        frame:SetScale(new)
+        local nx = cx - w * new * 0.5
+        local ny = cy + h * new * 0.5
+        frame:ClearAllPoints()
+        frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", nx, ny)
+        BuffNudgeDB[posX] = nx
+        BuffNudgeDB[posY] = ny
     end
     minus:SetScript("OnClick", function() apply(-0.1) end)
     plus:SetScript("OnClick",  function() apply( 0.1) end)
     return valFS
 end
 
-reminderScaleFS = MakeScaleControl(12,  -288, "Reminder", "panelScale",      "BuffNudgePanel",     "panelX",     "panelY")
-raidScaleFS     = MakeScaleControl(152, -288, "Raid",     "raidPanelScale",  "BuffNudgeRaidPanel", "raidPanelX", "raidPanelY")
-classScaleFS    = MakeScaleControl(288, -288, "Class",    "classPanelScale", "BuffNudgeClassPanel","classPanelX","classPanelY")
+reminderScaleFS = MakeScaleControl(12,  -288, "Reminder", "panelScale",      ns.ReminderPanel, "panelX",      "panelY")
+raidScaleFS     = MakeScaleControl(152, -288, "Raid",     "raidPanelScale",  ns.RaidPanel,     "raidPanelX",  "raidPanelY")
+classScaleFS    = MakeScaleControl(288, -288, "Class",    "classPanelScale", ns.ClassPanel,    "classPanelX", "classPanelY")
 
 -- ── Class Panel section ──────────────────────────────────────
 
@@ -445,11 +433,8 @@ resetClassBtn:SetText("Reset Class Panel")
 resetClassBtn:SetScript("OnClick", function()
     BuffNudgeDB.classPanelX = nil
     BuffNudgeDB.classPanelY = nil
-    local f = _G["BuffNudgeClassPanel"]
-    if f then
-        f:ClearAllPoints()
-        f:SetPoint("CENTER", UIParent, "CENTER", -130, 220)
-    end
+    ns.ClassPanel:ClearAllPoints()
+    ns.ClassPanel:SetPoint("CENTER", UIParent, "CENTER", -130, 220)
     print(ORANGE.."BuffNudge:"..RESET.." Class panel position reset.")
 end)
 

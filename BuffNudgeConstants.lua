@@ -128,6 +128,14 @@ ns.CMD = {
 }
 
 -- ============================================================
+-- LAYOUT
+-- ============================================================
+ns.ROW_H        = 18   -- height of each row in display panels
+ns.ROW_PAD_TOP  = 4    -- top padding inside panels before first row
+ns.ROW_PAD_SIDE = 8    -- left/right inset for rows
+ns.PANEL_EXTRA_H = 8   -- panel height added on top of n * ROW_H
+
+-- ============================================================
 -- WOW EVENTS
 -- ============================================================
 ns.EVENTS = {

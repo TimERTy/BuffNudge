@@ -7,5 +7,11 @@
 ## IconTexture: Interface/Icons/Spell_Holy_WordFortitude
 
 BuffNudgeConstants.lua
+BuffNudgeData.lua
+panels/BuffNudgePanelBase.lua
+panels/BuffNudgeReminderPanel.lua
+panels/BuffNudgeRaidPanel.lua
+panels/BuffNudgeClassPanel.lua
+panels/BuffNudgeFPS.lua
 BuffNudge.lua
 BuffNudgeSetup.lua
