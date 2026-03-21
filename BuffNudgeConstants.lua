@@ -38,34 +38,36 @@ ns.DEFAULT_RAID_BUFFS = {
 
 -- All slots that can carry gem sockets. C_Item.GetItemStats returns EMPTY_SOCKET_* keys
 -- only for slots that actually have sockets, so checking extras costs nothing.
+-- textBase: pre-built prefix used by GetMissingSockets() — appends count suffix at runtime.
 ns.SOCKET_SLOTS = {
-    { id =  1, name = "Helmet"    },
-    { id =  2, name = "Neck"      },
-    { id =  3, name = "Shoulder"  },
-    { id =  5, name = "Chest"     },
-    { id =  6, name = "Waist"     },
-    { id =  7, name = "Legs"      },
-    { id =  8, name = "Feet"      },
-    { id =  9, name = "Wrist"     },
-    { id = 10, name = "Hands"     },
-    { id = 11, name = "Ring 1"    },
-    { id = 12, name = "Ring 2"    },
-    { id = 15, name = "Back"      },
-    { id = 16, name = "Main Hand" },
-    { id = 17, name = "Off Hand"  },
+    { id =  1, name = "Helmet",    textBase = "|cffff4444Socket: Helmet"    },
+    { id =  2, name = "Neck",      textBase = "|cffff4444Socket: Neck"      },
+    { id =  3, name = "Shoulder",  textBase = "|cffff4444Socket: Shoulder"  },
+    { id =  5, name = "Chest",     textBase = "|cffff4444Socket: Chest"     },
+    { id =  6, name = "Waist",     textBase = "|cffff4444Socket: Waist"     },
+    { id =  7, name = "Legs",      textBase = "|cffff4444Socket: Legs"      },
+    { id =  8, name = "Feet",      textBase = "|cffff4444Socket: Feet"      },
+    { id =  9, name = "Wrist",     textBase = "|cffff4444Socket: Wrist"     },
+    { id = 10, name = "Hands",     textBase = "|cffff4444Socket: Hands"     },
+    { id = 11, name = "Ring 1",    textBase = "|cffff4444Socket: Ring 1"    },
+    { id = 12, name = "Ring 2",    textBase = "|cffff4444Socket: Ring 2"    },
+    { id = 15, name = "Back",      textBase = "|cffff4444Socket: Back"      },
+    { id = 16, name = "Main Hand", textBase = "|cffff4444Socket: Main Hand" },
+    { id = 17, name = "Off Hand",  textBase = "|cffff4444Socket: Off Hand"  },
 }
 
 -- Enchantable slots in Midnight: Helmet, Shoulder, Chest, Boots, Rings, Weapons.
 -- Cloak and Bracers are NOT enchantable in Midnight.
+-- textMissing: fully pre-built string used directly by GetMissingEnchants().
 ns.ENCHANT_SLOTS = {
-    { id =  1, name = "Helmet"    },
-    { id =  3, name = "Shoulder"  },
-    { id =  5, name = "Chest"     },
-    { id =  8, name = "Boots"     },
-    { id = 11, name = "Ring 1"    },
-    { id = 12, name = "Ring 2"    },
-    { id = 16, name = "Main Hand" },
-    { id = 17, name = "Off Hand"  },
+    { id =  1, name = "Helmet",    textMissing = "|cffff4444Enchant: Helmet|r"    },
+    { id =  3, name = "Shoulder",  textMissing = "|cffff4444Enchant: Shoulder|r"  },
+    { id =  5, name = "Chest",     textMissing = "|cffff4444Enchant: Chest|r"     },
+    { id =  8, name = "Boots",     textMissing = "|cffff4444Enchant: Boots|r"     },
+    { id = 11, name = "Ring 1",    textMissing = "|cffff4444Enchant: Ring 1|r"    },
+    { id = 12, name = "Ring 2",    textMissing = "|cffff4444Enchant: Ring 2|r"    },
+    { id = 16, name = "Main Hand", textMissing = "|cffff4444Enchant: Main Hand|r" },
+    { id = 17, name = "Off Hand",  textMissing = "|cffff4444Enchant: Off Hand|r"  },
 }
 
 -- ============================================================

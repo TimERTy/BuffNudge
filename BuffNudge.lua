@@ -54,24 +54,31 @@ local CMD    = ns.CMD
 -- only when their respective invalidation events fire.
 -- ============================================================
 
-local cachedFoodSet, cachedFlaskSet, cachedRaidBuffs
+local cachedFoodSet, cachedFoodIcon, cachedFlaskSet, cachedRaidBuffs
 local cachedGroupClasses    -- invalidated by GROUP_ROSTER_UPDATE
 local cachedMissingEnchants -- invalidated by PLAYER_EQUIPMENT_CHANGED
 local cachedMissingSockets  -- invalidated by PLAYER_EQUIPMENT_CHANGED
 local cachedSoulstone       -- invalidated by GROUP_ROSTER_UPDATE
+local cachedHasHealthstone  -- invalidated by BAG_UPDATE_DELAYED
+local cachedProfile         -- invalidated by BuffNudge_InvalidateCache
 
 function BuffNudge_InvalidateCache()
     cachedFoodSet         = nil
+    cachedFoodIcon        = nil
     cachedFlaskSet        = nil
     cachedRaidBuffs       = nil
     cachedGroupClasses    = nil
     cachedMissingEnchants = nil
     cachedMissingSockets  = nil
     cachedSoulstone       = nil
+    cachedHasHealthstone  = nil
+    cachedProfile         = nil
 end
 
 -- Returns the currently active profile table from BuffNudgeDB.
+-- Result is cached; invalidated by BuffNudge_InvalidateCache() on profile switch or save.
 local function GetProfile()
+    if cachedProfile then return cachedProfile end
     local name = BuffNudgeDB.activeProfile or "Default"
     local p = BuffNudgeDB.profiles and BuffNudgeDB.profiles[name]
     if not p then
@@ -80,6 +87,7 @@ local function GetProfile()
               checkPet=true, checkEnchant=true, checkSocket=true, checkRaidBuff=true }
         if BuffNudgeDB.profiles then BuffNudgeDB.profiles[name] = p end
     end
+    cachedProfile = p
     return p
 end
 ns.GetProfile = GetProfile
@@ -87,10 +95,10 @@ ns.GetProfile = GetProfile
 local function GetFoodSet()
     if cachedFoodSet then return cachedFoodSet end
     cachedFoodSet = {}
-    for _, v in ipairs(DEFAULT_FOOD_IDS)            do cachedFoodSet[v] = true end
-    for _, v in ipairs(GetProfile().foodIDs or {})  do cachedFoodSet[v] = true end
-    -- Cache the icon using the first known food ID so Refresh never calls GetSpellTexture
-    cachedFoodSet._icon = C_Spell.GetSpellTexture(DEFAULT_FOOD_IDS[1]) or ICON_FOOD
+    for _, v in ipairs(DEFAULT_FOOD_IDS)           do cachedFoodSet[v] = true end
+    for _, v in ipairs(GetProfile().foodIDs or {}) do cachedFoodSet[v] = true end
+    -- Icon cached separately so the hash set stays clean (no string key mixed with int keys).
+    cachedFoodIcon = C_Spell.GetSpellTexture(DEFAULT_FOOD_IDS[1]) or ICON_FOOD
     return cachedFoodSet
 end
 
@@ -142,7 +150,7 @@ local function GetGroupClasses()
 end
 
 -- Socket results: rebuilt only when PLAYER_EQUIPMENT_CHANGED fires.
--- Uses C_Item.GetItemStats which returns EMPTY_SOCKET_* keys for unfilled gem slots.
+-- Uses pre-built slot.textBase strings from BuffNudgeConstants.lua; appends count suffix.
 local function GetMissingSockets()
     if cachedMissingSockets then return cachedMissingSockets end
     local missing = {}
@@ -156,8 +164,8 @@ local function GetMissingSockets()
                     if stat:find("EMPTY_SOCKET") then emptyCount = emptyCount + count end
                 end
                 if emptyCount > 0 then
-                    local suffix = emptyCount > 1 and (" ("..emptyCount.."x)") or ""
-                    table.insert(missing, RED.."Socket: "..slot.name..suffix..RESET)
+                    local suffix = emptyCount > 1 and (" ("..emptyCount.."x)|r") or "|r"
+                    table.insert(missing, slot.textBase..suffix)
                 end
             end
         end
@@ -167,6 +175,7 @@ local function GetMissingSockets()
 end
 
 -- Enchant results: rebuilt only when PLAYER_EQUIPMENT_CHANGED fires.
+-- Uses pre-built slot.textMissing strings from BuffNudgeConstants.lua.
 local function GetMissingEnchants()
     if cachedMissingEnchants then return cachedMissingEnchants end
     local missing = {}
@@ -175,7 +184,7 @@ local function GetMissingEnchants()
         if link then
             local enchantID = link:match("|Hitem:%d+:(%d+):")
             if not enchantID or enchantID == "0" then
-                table.insert(missing, RED.."Enchant: "..slot.name..RESET)
+                table.insert(missing, slot.textMissing)
             end
         end
     end
@@ -243,23 +252,29 @@ local function HasSoulstone(auraSet, groupClasses)
 end
 
 local function HasHealthstone()
+    if cachedHasHealthstone ~= nil then return cachedHasHealthstone end
+    local found = false
     for _, id in ipairs(DEFAULT_HEALTHSTONE_ITEM_IDS) do
-        if C_Item.GetItemCount(id) > 0 then return true end
+        if C_Item.GetItemCount(id) > 0 then found = true; break end
     end
     -- Fallback: scan bags for any item whose name contains "healthstone"
-    -- catches Demonic Healthstone and any future variants with unknown IDs
-    for bag = 0, 4 do
-        for slot = 1, C_Container.GetContainerNumSlots(bag) do
-            local info = C_Container.GetContainerItemInfo(bag, slot)
-            if info and info.itemID then
-                local name = C_Item.GetItemNameByID(info.itemID)
-                if name and name:lower():find("healthstone", 1, true) then
-                    return true
+    -- catches Demonic Healthstone and any future variants with unknown IDs.
+    if not found then
+        for bag = 0, 4 do
+            for slot = 1, C_Container.GetContainerNumSlots(bag) do
+                local info = C_Container.GetContainerItemInfo(bag, slot)
+                if info and info.itemID then
+                    local name = C_Item.GetItemNameByID(info.itemID)
+                    if name and name:lower():find("healthstone", 1, true) then
+                        found = true; break
+                    end
                 end
             end
+            if found then break end
         end
     end
-    return false
+    cachedHasHealthstone = found
+    return found
 end
 
 -- Blessing of the Bronze: one ID per class (381732–381758), O(27) hash lookups.
@@ -666,7 +681,7 @@ function BuffNudge_Refresh()
     local n = 0
     local function push(text, icon) n=n+1; itemsBuf[n].text=text; itemsBuf[n].icon=icon end
 
-    if p.checkFood    and not inCombat and not HasFood(auraSet)                              then push(TEXT_NO_FOOD,  GetFoodSet()._icon or ICON_FOOD) end
+    if p.checkFood    and not inCombat and not HasFood(auraSet)                              then push(TEXT_NO_FOOD,  cachedFoodIcon or ICON_FOOD) end
     if p.checkFlask   and not HasFlask(auraSet)                                              then push(TEXT_NO_FLASK, ICON_FLASK) end
     if p.checkEnchant and not inCombat then
         for _, text in ipairs(GetMissingEnchants()) do push(text, ICON_ENCHANT) end
@@ -764,7 +779,7 @@ local refreshPending = false
 
 local function safeRegister(event)
     local ok, err = pcall(eventFrame.RegisterEvent, eventFrame, event)
-    if not ok then
+    if not ok and debugMode then
         print("BuffNudge: skipping unknown event: " .. event)
     end
 end
@@ -779,6 +794,7 @@ safeRegister(EVENTS.PLAYER_EQUIPMENT_CHANGED)
 safeRegister(EVENTS.PLAYER_REGEN_ENABLED)
 safeRegister(EVENTS.PLAYER_REGEN_DISABLED)
 safeRegister(EVENTS.UNIT_AURA)
+safeRegister(EVENTS.BAG_UPDATE_DELAYED)
 
 local lastFire = 0
 eventFrame:SetScript("OnEvent", function(self, event, arg1)
@@ -873,6 +889,8 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
     elseif event == EVENTS.PLAYER_EQUIPMENT_CHANGED then
         cachedMissingEnchants = nil
         cachedMissingSockets  = nil
+    elseif event == EVENTS.BAG_UPDATE_DELAYED then
+        cachedHasHealthstone = nil
     elseif event == EVENTS.UNIT_AURA and arg1 ~= "player" then
         return
     end
