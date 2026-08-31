@@ -209,6 +209,8 @@ SlashCmdList["BUFFNUDGE"] = function(msg)
         ns.debugMode = not ns.debugMode
         print(ORANGE.."BuffNudge:"..RESET.." Debug mode "..(ns.debugMode and GREEN.."ON"..RESET or RED.."OFF"..RESET))
         BuffNudge_Refresh()
+    elseif msg == CMD.AURAS then
+        ns.DumpPlayerAuras()
     elseif msg == CMD.FPS then
         if ns.FpsFrame:IsShown() then
             ns.FpsFrame:Hide()

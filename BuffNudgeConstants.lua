@@ -24,7 +24,14 @@ ns.DEFAULT_FOOD_IDS = {
     57399,   -- Well Fed (older fallback)
 }
 
--- All four Midnight stat flasks. Use /bn setup if you use a cauldron variant.
+-- Detection is primarily by aura NAME, not ID: every variant's name contains the
+-- base "Well Fed" string, so one localised substring covers all 80+ of them.
+-- This ID is only read to resolve that localised string via C_Spell.GetSpellName.
+ns.WELL_FED_BASE_SPELL_ID = 57399
+
+-- All four Midnight stat flasks. Cauldron and future variants are caught by the
+-- name-prefix match derived from these at runtime (see GetFlaskNamePrefix);
+-- use /bn setup for anything named outside that convention.
 ns.DEFAULT_FLASK_IDS = {
     1235108,  -- Flask of the Magisters      (Mastery)
     1235110,  -- Flask of the Blood Knights  (Haste)
@@ -133,6 +140,7 @@ ns.CMD = {
     MOVE  = "move",
     DEBUG = "debug",
     FPS   = "fps",
+    AURAS = "auras",
 }
 
 -- ============================================================

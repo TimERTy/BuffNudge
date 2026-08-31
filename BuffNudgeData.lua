@@ -10,6 +10,7 @@ local ENCHANT_SLOTS                = ns.ENCHANT_SLOTS
 local SOCKET_SLOTS                 = ns.SOCKET_SLOTS
 local ITEM_CLASS_WEAPON            = ns.ITEM_CLASS_WEAPON
 local SOULSTONE_SPELL_ID           = ns.SOULSTONE_SPELL_ID
+local WELL_FED_BASE_SPELL_ID       = ns.WELL_FED_BASE_SPELL_ID
 
 local ICON_FOOD     = ns.ICON_FOOD
 local ICON_RAIDBUFF = ns.ICON_RAIDBUFF
@@ -203,14 +204,85 @@ ns.GetMissingEnchants = GetMissingEnchants
 -- Reused across Refresh calls to avoid per-call allocation.
 local playerAuraSet = {}
 
--- Clears and repopulates playerAuraSet with current player buffs.
+-- Set during the aura sweep when a buff name matches the localised patterns below.
+local playerHasFoodAura  = false
+local playerHasFlaskAura = false
+
+-- Both resolvers are lazy and retry on failure: spell data may not be cached at
+-- file load, or on the first Refresh after login.
+
+-- Food variants are all named "<something> Well Fed", so the base name works as
+-- a substring match.
+local wellFedName
+local function GetWellFedName()
+    if not wellFedName then
+        wellFedName = C_Spell.GetSpellName(WELL_FED_BASE_SPELL_ID)
+    end
+    return wellFedName
+end
+
+-- Flasks share no single word, but they do share a prefix ("Flask of " in enUS).
+-- Deriving it from the default flask names keeps the match correct in every
+-- locale instead of hardcoding English.
+-- Returns nil unless every id resolves: spell data loads asynchronously, and a
+-- prefix computed from a partial set would be too long and reject real flasks.
+local function CommonSpellNamePrefix(ids)
+    local prefix
+    for _, id in ipairs(ids) do
+        local name = C_Spell.GetSpellName(id)
+        if not name then return nil end
+        if not prefix then
+            prefix = name
+        else
+            local n, max = 0, math.min(#prefix, #name)
+            while n < max and prefix:byte(n + 1) == name:byte(n + 1) do n = n + 1 end
+            prefix = prefix:sub(1, n)
+        end
+    end
+    return prefix
+end
+
+local flaskNamePrefix
+local function GetFlaskNamePrefix()
+    if not flaskNamePrefix then
+        local prefix = CommonSpellNamePrefix(DEFAULT_FLASK_IDS)
+        -- Trim back to a word boundary. Keeps the match meaningful and, since a
+        -- space is single-byte, avoids slicing a multi-byte character in half.
+        local lastSpace = prefix and prefix:match(".*() ")
+        prefix = lastSpace and prefix:sub(1, lastSpace) or nil
+        -- Too short to be distinctive: fall back to ID matching alone.
+        if prefix and #prefix < 4 then prefix = nil end
+        flaskNamePrefix = prefix
+    end
+    return flaskNamePrefix
+end
+
+-- Clears and repopulates playerAuraSet with current player buffs, and flags food
+-- and flask buffs by name in the same pass.
 local function GetPlayerAuraSet()
     for k in next, playerAuraSet do playerAuraSet[k] = nil end
+    playerHasFoodAura  = false
+    playerHasFlaskAura = false
+    local wellFed     = GetWellFedName()
+    local flaskPrefix = GetFlaskNamePrefix()
     local auras = C_UnitAuras.GetUnitAuras("player", "HELPFUL", 100)
     if auras then
         for _, aura in ipairs(auras) do
-            if aura.spellId and not issecretvalue(aura.spellId) then
-                playerAuraSet[aura.spellId] = true
+            local id = aura.spellId
+            if id and not issecretvalue(id) then
+                playerAuraSet[id] = true
+            end
+            if not (playerHasFoodAura and playerHasFlaskAura) then
+                local name = aura.name
+                if name and not issecretvalue(name) then
+                    if wellFed and not playerHasFoodAura and name:find(wellFed, 1, true) then
+                        playerHasFoodAura = true
+                    end
+                    -- Anchored at 1: a flask buff leads with the prefix.
+                    if flaskPrefix and not playerHasFlaskAura and name:find(flaskPrefix, 1, true) == 1 then
+                        playerHasFlaskAura = true
+                    end
+                end
             end
         end
     end
@@ -218,7 +290,11 @@ local function GetPlayerAuraSet()
 end
 ns.GetPlayerAuraSet = GetPlayerAuraSet
 
+-- Name match first: it covers every Well Fed variant, including the ones with no
+-- entry in DEFAULT_FOOD_IDS. The ID set still applies for anything tagged through
+-- /bn setup whose name does not follow that convention.
 local function HasFood(auraSet)
+    if playerHasFoodAura then return true end
     for id in pairs(GetFoodSet()) do
         if auraSet[id] then return true end
     end
@@ -226,7 +302,27 @@ local function HasFood(auraSet)
 end
 ns.HasFood = HasFood
 
+-- Diagnostic for /bn auras: lists the player's buffs so an untagged consumable
+-- can be identified and added through /bn setup.
+function ns.DumpPlayerAuras()
+    local auras = C_UnitAuras.GetUnitAuras("player", "HELPFUL", 100)
+    if not auras or #auras == 0 then
+        print("BuffNudge: no buffs found.")
+        return
+    end
+    for _, aura in ipairs(auras) do
+        local id, name = aura.spellId, aura.name
+        print("BuffNudge: "
+            .. ((name and not issecretvalue(name)) and name or "<secret>")
+            .. " = "
+            .. ((id and not issecretvalue(id)) and tostring(id) or "<secret>"))
+    end
+end
+
+-- Name match first, same rationale as HasFood: it covers cauldron and future
+-- variants that have no entry in DEFAULT_FLASK_IDS.
 local function HasFlask(auraSet)
+    if playerHasFlaskAura then return true end
     for id in pairs(GetFlaskSet()) do
         if auraSet[id] then return true end
     end
