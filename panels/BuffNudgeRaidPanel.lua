@@ -25,7 +25,7 @@ function ns.RefreshRaidPanel(auraSet, groupClasses, p, inCombat)
         local row = pool.GetRow(i)
         row.icon:SetTexture(icons[i])
         local spellID = spellIDs[i]
-        local known   = spellID and IsSpellKnown(spellID, false)
+        local known   = spellID and C_SpellBook.IsSpellKnown(spellID)
         if known then
             row.text:SetText(texts[i].." |cffaaaaaa[cast]|r")
             row:SetAttribute("spell", spellID)
@@ -47,7 +47,7 @@ function ns.DebugRaidPanel()
         rn = rn + 1
         local row = pool.GetRow(rn)
         row.icon:SetTexture(entry.icon)
-        local known = entry.spellID and IsSpellKnown(entry.spellID)
+        local known = entry.spellID and C_SpellBook.IsSpellKnown(entry.spellID)
         if known then
             row.text:SetText(YELLOW..entry.name..RESET.." |cffaaaaaa[cast]|r")
             row:SetAttribute("spell", entry.spellID)

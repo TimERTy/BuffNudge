@@ -8,6 +8,8 @@ local DEFAULT_HEALTHSTONE_ITEM_IDS = ns.DEFAULT_HEALTHSTONE_ITEM_IDS
 local DEFAULT_RAID_BUFFS           = ns.DEFAULT_RAID_BUFFS
 local ENCHANT_SLOTS                = ns.ENCHANT_SLOTS
 local SOCKET_SLOTS                 = ns.SOCKET_SLOTS
+local ITEM_CLASS_WEAPON            = ns.ITEM_CLASS_WEAPON
+local SOULSTONE_SPELL_ID           = ns.SOULSTONE_SPELL_ID
 
 local ICON_FOOD     = ns.ICON_FOOD
 local ICON_RAIDBUFF = ns.ICON_RAIDBUFF
@@ -27,7 +29,8 @@ local cachedFoodSet, cachedFoodIcon, cachedFlaskSet, cachedRaidBuffs
 local cachedGroupClasses    -- invalidated by GROUP_ROSTER_UPDATE
 local cachedMissingEnchants -- invalidated by PLAYER_EQUIPMENT_CHANGED
 local cachedMissingSockets  -- invalidated by PLAYER_EQUIPMENT_CHANGED
-local cachedSoulstone       -- invalidated by GROUP_ROSTER_UPDATE
+local cachedSoulstone       -- invalidated by GROUP_ROSTER_UPDATE / group aura watcher
+local cachedSoulstoneUnit   -- unit token holding it, so the watcher can track one unit
 local cachedHasHealthstone  -- invalidated by BAG_UPDATE_DELAYED
 local cachedProfile         -- invalidated by BuffNudge_InvalidateCache
 
@@ -40,6 +43,7 @@ function BuffNudge_InvalidateCache()
     cachedMissingEnchants = nil
     cachedMissingSockets  = nil
     cachedSoulstone       = nil
+    cachedSoulstoneUnit   = nil
     cachedHasHealthstone  = nil
     cachedProfile         = nil
 end
@@ -55,9 +59,10 @@ function ns.MakeDefaultProfile()
 end
 
 -- Fine-grained cache invalidation for specific event types.
-function ns.InvalidateGroupCache()     cachedGroupClasses = nil; cachedSoulstone = nil end
+function ns.InvalidateGroupCache()     cachedGroupClasses = nil; cachedSoulstone = nil; cachedSoulstoneUnit = nil end
 function ns.InvalidateEquipmentCache() cachedMissingEnchants = nil; cachedMissingSockets = nil end
 function ns.InvalidateBagCache()       cachedHasHealthstone = nil end
+function ns.InvalidateSoulstoneCache() cachedSoulstone = nil; cachedSoulstoneUnit = nil end
 
 -- Returns the currently active profile table from BuffNudgeDB.
 -- Result is cached; invalidated by BuffNudge_InvalidateCache() on profile switch or save.
@@ -142,10 +147,19 @@ local function GetMissingSockets()
         if link then
             local stats = C_Item.GetItemStats(link)
             if stats then
-                local emptyCount = 0
+                -- EMPTY_SOCKET_* in the stat table is the item's TOTAL socket count,
+                -- not the unfilled ones -- it stays put after gemming. Subtract the
+                -- gems actually present in the link to get the real empty count.
+                local socketCount = 0
                 for stat, count in pairs(stats) do
-                    if stat:find("EMPTY_SOCKET") then emptyCount = emptyCount + count end
+                    if stat:find("EMPTY_SOCKET") then socketCount = socketCount + count end
                 end
+                local gemCount = 0
+                for i = 1, socketCount do
+                    local _, gemLink = C_Item.GetItemGem(link, i)
+                    if gemLink then gemCount = gemCount + 1 end
+                end
+                local emptyCount = socketCount - gemCount
                 if emptyCount > 0 then
                     local suffix = emptyCount > 1 and (" ("..emptyCount.."x)|r") or "|r"
                     table.insert(missing, slot.textBase..suffix)
@@ -158,13 +172,19 @@ local function GetMissingSockets()
 end
 ns.GetMissingSockets = GetMissingSockets
 
+-- Shields and holdable off-hands sit in the off-hand slot but take no enchant.
+local function IsWeaponLink(link)
+    local _, _, _, _, _, classID = C_Item.GetItemInfoInstant(link)
+    return classID == ITEM_CLASS_WEAPON
+end
+
 -- Enchant results: rebuilt only when PLAYER_EQUIPMENT_CHANGED fires.
 local function GetMissingEnchants()
     if cachedMissingEnchants then return cachedMissingEnchants end
     local missing = {}
     for _, slot in ipairs(ENCHANT_SLOTS) do
         local link = GetInventoryItemLink("player", slot.id)
-        if link then
+        if link and (not slot.weaponOnly or IsWeaponLink(link)) then
             local enchantID = link:match("|Hitem:%d+:(%d+):")
             if not enchantID or enchantID == "0" then
                 table.insert(missing, slot.textMissing)
@@ -220,30 +240,58 @@ function ns.GetFoodIcon()
     return cachedFoodIcon or ICON_FOOD
 end
 
+local function UnitHasSoulstone(unit)
+    local auras = C_UnitAuras.GetUnitAuras(unit, "HELPFUL", 100)
+    if not auras then return false end
+    for _, aura in ipairs(auras) do
+        local id = aura.spellId
+        if id and not issecretvalue(id) and id == SOULSTONE_SPELL_ID then return true end
+    end
+    return false
+end
+
 local function HasSoulstone(auraSet, groupClasses)
     if not groupClasses["WARLOCK"] then return true end
-    if auraSet[20707] then return true end  -- player has it (fresh from auraSet each Refresh)
+    if auraSet[SOULSTONE_SPELL_ID] then return true end  -- player has it (fresh from auraSet each Refresh)
     if cachedSoulstone ~= nil then return cachedSoulstone end
-    -- Scan group members — result cached until GROUP_ROSTER_UPDATE.
+    -- Full group scan. Only runs when the cache is cold; from then on the group
+    -- aura watcher keeps it current one unit at a time (ns.UpdateSoulstoneForUnit).
     local inRaid = IsInRaid()
     for i = 1, GetNumGroupMembers() do
         local unit = inRaid and ("raid"..i) or ("party"..i)
-        if UnitExists(unit) then
-            local auras = C_UnitAuras.GetUnitAuras(unit, "HELPFUL", 100)
-            if auras then
-                for _, aura in ipairs(auras) do
-                    if aura.spellId and not issecretvalue(aura.spellId) and aura.spellId == 20707 then
-                        cachedSoulstone = true
-                        return true
-                    end
-                end
-            end
+        if UnitExists(unit) and UnitHasSoulstone(unit) then
+            cachedSoulstone     = true
+            cachedSoulstoneUnit = unit
+            return true
         end
     end
-    cachedSoulstone = false
+    cachedSoulstone     = false
+    cachedSoulstoneUnit = nil
     return false
 end
 ns.HasSoulstone = HasSoulstone
+
+-- Incremental update driven by UNIT_AURA on group members. Costs one aura fetch
+-- per event instead of rescanning the raid, by remembering which unit carries
+-- the stone and ignoring aura churn on everyone else.
+-- Returns true when the cached state changed and the panels need a refresh.
+function ns.UpdateSoulstoneForUnit(unit)
+    if cachedSoulstone and cachedSoulstoneUnit and not UnitIsUnit(unit, cachedSoulstoneUnit) then
+        return false  -- someone else's aura churn; the tracked holder still has it
+    end
+    if UnitHasSoulstone(unit) then
+        if cachedSoulstone and cachedSoulstoneUnit then return false end
+        cachedSoulstone, cachedSoulstoneUnit = true, unit
+        return true
+    end
+    if cachedSoulstone then
+        -- Holder lost it. Drop to nil so the next Refresh does one full rescan
+        -- (another member may still be stoned).
+        cachedSoulstone, cachedSoulstoneUnit = nil, nil
+        return true
+    end
+    return false
+end
 
 local function HasHealthstone()
     if cachedHasHealthstone ~= nil then return cachedHasHealthstone end

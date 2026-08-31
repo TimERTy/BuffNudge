@@ -1,4 +1,4 @@
-## Interface: 120001
+## Interface: 120100
 ## Title: BuffNudge
 ## Notes: Reminds you about missing food, flask/phial, soulstone, enchants, and raid buffs when in a dungeon or raid.
 ## Version: 1.0
@@ -7,6 +7,7 @@
 ## IconTexture: Interface/Icons/Spell_Holy_WordFortitude
 
 BuffNudgeConstants.lua
+BuffNudgeEvents.lua
 BuffNudgeData.lua
 panels/BuffNudgePanelBase.lua
 panels/BuffNudgeReminderPanel.lua
