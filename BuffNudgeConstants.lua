@@ -32,6 +32,9 @@ ns.DEFAULT_FLASK_IDS = {
     1230878,  -- Flask of the Shattered Sun  (Critical Strike)
 }
 
+-- Soulstone (Resurrection) aura applied to the res target.
+ns.SOULSTONE_SPELL_ID = 20707
+
 -- Healthstone item IDs checked via GetItemCount.
 ns.DEFAULT_HEALTHSTONE_ITEM_IDS = { 5512 }  -- Healthstone (variants caught by name scan in HasHealthstone)
 
@@ -70,6 +73,8 @@ ns.SOCKET_SLOTS = {
 -- Enchantable slots in Midnight: Helmet, Shoulder, Chest, Boots, Rings, Weapons.
 -- Cloak and Bracers are NOT enchantable in Midnight.
 -- textMissing: built below from slot.name — used directly by GetMissingEnchants().
+-- weaponOnly: slot can also hold non-enchantable gear (shield / holdable off-hand),
+-- so only warn when the equipped item is an actual weapon.
 ns.ENCHANT_SLOTS = {
     { id =  1, name = "Helmet"    },
     { id =  3, name = "Shoulder"  },
@@ -78,8 +83,11 @@ ns.ENCHANT_SLOTS = {
     { id = 11, name = "Ring 1"    },
     { id = 12, name = "Ring 2"    },
     { id = 16, name = "Main Hand" },
-    { id = 17, name = "Off Hand"  },
+    { id = 17, name = "Off Hand", weaponOnly = true },
 }
+
+-- Item class for weapons (Enum.ItemClass.Weapon); used to gate off-hand enchant checks.
+ns.ITEM_CLASS_WEAPON = 2
 
 -- Build text fields from name + colour constants (avoids hardcoded escape sequences).
 local R, Z = ns.RED, ns.RESET
@@ -138,6 +146,12 @@ ns.PANEL_EXTRA_H = 8   -- panel height added on top of n * ROW_H
 -- ============================================================
 -- WOW EVENTS
 -- ============================================================
+-- Edit mode has no real events; Blizzard fires these EventRegistry callbacks.
+ns.EDIT_MODE_CALLBACKS = {
+    ENTER = "EditMode.Enter",
+    EXIT  = "EditMode.Exit",
+}
+
 ns.EVENTS = {
     ADDON_LOADED             = "ADDON_LOADED",
     PLAYER_ENTERING_WORLD    = "PLAYER_ENTERING_WORLD",
@@ -147,7 +161,6 @@ ns.EVENTS = {
     PLAYER_REGEN_ENABLED     = "PLAYER_REGEN_ENABLED",
     PLAYER_REGEN_DISABLED    = "PLAYER_REGEN_DISABLED",
     UNIT_AURA                = "UNIT_AURA",
-    EDIT_MODE_ENTER          = "EDIT_MODE_ENTER",
-    EDIT_MODE_EXIT           = "EDIT_MODE_EXIT",
+    UNIT_PET                 = "UNIT_PET",
     BAG_UPDATE_DELAYED       = "BAG_UPDATE_DELAYED",
 }
